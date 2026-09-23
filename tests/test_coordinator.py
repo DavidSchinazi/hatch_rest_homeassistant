@@ -33,7 +33,7 @@ class TestHatchBabyRestUpdateCoordinator:
         assert coordinator.unique_id == "aabbccddeeff"
         assert coordinator.hatch_rest_device == mock_hatch_api
         assert coordinator.name == DOMAIN
-        assert coordinator.update_interval == timedelta(minutes=10)
+        assert coordinator.update_interval == timedelta(seconds=90)
 
     def test_handle_advertisement_updates_listeners(
         self, hass: HomeAssistant, mock_ble_device

@@ -37,9 +37,10 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER,
             name=DOMAIN,
             # State normally arrives from advertisements, which need no
-            # connection. This poll is only a fallback for a device that
-            # stops advertising.
-            update_interval=timedelta(minutes=10),
+            # connection. This poll is only a backstop for a device that
+            # stops advertising, kept short enough that a change made on the
+            # device itself still shows up within about a minute.
+            update_interval=timedelta(seconds=90),
         )
         self.unique_id = unique_id
         self.hatch_rest_device = hatch_rest_device

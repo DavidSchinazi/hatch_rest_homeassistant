@@ -19,8 +19,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up Hatch Rest switch."""
     coordinator = config_entry.runtime_data
-    # only need to update_before_add on one entity -- switch is "master" entity
-    async_add_entities([HatchBabyRestSwitch(coordinator)], update_before_add=True)
+    # The coordinator is already seeded from an advertisement, so updating
+    # before add would only cost a connection: CoordinatorEntity.async_update
+    # calls async_request_refresh, which reads state over GATT.
+    async_add_entities([HatchBabyRestSwitch(coordinator)], update_before_add=False)
 
 
 class HatchBabyRestSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]

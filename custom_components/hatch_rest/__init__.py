@@ -12,7 +12,11 @@ from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import PyHatchBabyRestAsync
-from .const import MANUFACTURER_ID
+from .const import (
+    ACTIVE_SCAN_DURATION_SECONDS,
+    ACTIVE_SCAN_INTERVAL_SECONDS,
+    MANUFACTURER_ID,
+)
 from .coordinator import HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +55,13 @@ async def async_setup_entry(
             coordinator.async_handle_advertisement,
             BluetoothCallbackMatcher(address=address.upper(), connectable=True),
             BluetoothScanningMode.ACTIVE,
+            # An AUTO mode scanner only turns active for a registered address
+            # on a schedule, which defaults to 10s every 5 minutes. State only
+            # reaches us in the scan response, so ask for it far more often
+            # than that rather than depending on the scanner being pinned to
+            # active mode.
+            scan_interval=ACTIVE_SCAN_INTERVAL_SECONDS,
+            scan_duration=ACTIVE_SCAN_DURATION_SECONDS,
         )
     )
     entry.async_on_unload(hatch_rest_device.async_stop)

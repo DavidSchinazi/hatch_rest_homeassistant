@@ -29,6 +29,13 @@ ADVERTISEMENT_COLOR_INDEX = 6
 ADVERTISEMENT_SOUND_INDEX = 11
 ADVERTISEMENT_POWER_INDEX = 20
 
+# How often, and for how long, to ask AUTO mode scanners to scan actively for
+# a configured device. State is carried in the scan response, which only an
+# active scan collects, so the defaults of 10s every 5 minutes are far too
+# sparse.
+ACTIVE_SCAN_INTERVAL_SECONDS = 15
+ACTIVE_SCAN_DURATION_SECONDS = 10
+
 # How long to keep a connection open after the last operation.
 IDLE_DISCONNECT_SECONDS = 30
 
