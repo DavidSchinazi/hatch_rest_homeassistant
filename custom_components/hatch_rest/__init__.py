@@ -42,12 +42,15 @@ async def async_setup_entry(
     entry.runtime_data = coordinator
 
     # Keep state up to date from advertisements, which need no connection.
+    # The state lives in the manufacturer data, which is too big to share a
+    # legacy advertising PDU with the name and service data the device also
+    # sends, so it arrives in the scan response and needs active scanning.
     entry.async_on_unload(
         bluetooth.async_register_callback(
             hass,
             coordinator.async_handle_advertisement,
             BluetoothCallbackMatcher(address=address.upper(), connectable=True),
-            BluetoothScanningMode.PASSIVE,
+            BluetoothScanningMode.ACTIVE,
         )
     )
     entry.async_on_unload(hatch_rest_device.async_stop)
