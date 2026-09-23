@@ -27,6 +27,7 @@ from .const import (
     ADVERTISEMENT_SOUND_INDEX,
     CHAR_FEEDBACK,
     CHAR_TX,
+    COMMAND_SETTLE_SECONDS,
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
     FEEDBACK_SOUND_INDEX,
@@ -81,6 +82,7 @@ class PyHatchBabyRestAsync:
         self._active_operations: int = 0
         self._disconnect_timer: asyncio.TimerHandle | None = None
         self._disconnect_task: asyncio.Task | None = None
+        self._settle_until: float = 0.0
 
         # connection synchronization primitizes / state
         self._connection_cv = asyncio.Condition()
@@ -260,6 +262,12 @@ class PyHatchBabyRestAsync:
         if not manufacturer_data:
             return False
 
+        if monotonic() < self._settle_until:
+            # A command was just written. The device may still be advertising
+            # the state it had beforehand, which would revert the entity.
+            _LOGGER.debug("Ignoring advertisement while the last command settles")
+            return False
+
         try:
             state = _parse_state(
                 manufacturer_data,
@@ -306,6 +314,7 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("Exception during _send_command -- %r", e)
 
         self._set_active_operations(-1)
+        self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
         self._schedule_idle_disconnect()
 
         if log_timing:

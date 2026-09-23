@@ -32,6 +32,11 @@ ADVERTISEMENT_POWER_INDEX = 20
 # How long to keep a connection open after the last operation.
 IDLE_DISCONNECT_SECONDS = 30
 
+# How long after a command to keep trusting what was written over what the
+# device advertises, so an advertisement still describing the old state does
+# not briefly revert it.
+COMMAND_SETTLE_SECONDS = 2
+
 
 class PyHatchBabyRestSound(IntEnum):
     """Enum for Hatch Rest sound options."""

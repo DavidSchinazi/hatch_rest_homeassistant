@@ -324,6 +324,30 @@ class TestPyHatchBabyRestAsync:
         )
 
     @pytest.mark.asyncio
+    async def test_advertisement_does_not_revert_fresh_command(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a stale advertisement does not undo what was just written."""
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+        ):
+            api._client = AsyncMock()
+            await api.turn_power_on()
+
+        assert api.power is True
+
+        # ADVERTISEMENT still describes the device as powered off, which
+        # would revert the entity if it were applied.
+        assert api.update_from_advertisement(ADVERTISEMENT) is False
+        assert api.power is True
+
+        # Once the command has settled, the advertisement is authoritative.
+        api._settle_until = 0.0
+        assert api.update_from_advertisement(ADVERTISEMENT) is True
+        assert api.power is False
+
+    @pytest.mark.asyncio
     async def test_send_command_schedules_idle_disconnect(
         self, api: PyHatchBabyRestAsync
     ):
