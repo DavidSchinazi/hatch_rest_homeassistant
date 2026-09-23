@@ -239,6 +239,69 @@ class TestPyHatchBabyRestAsync:
             mock_send.assert_called_once_with("SCff8040c8")  # 200 in hex = c8
 
     @pytest.mark.asyncio
+    async def test_set_color_then_brightness_keeps_color(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test consecutive color and brightness calls do not fight.
+
+        Both are written with the same SC command, each filling in the other
+        value from the cache, so setting one must not revert the other.
+        """
+        api.color = (255, 255, 255)
+        api.brightness = 255
+
+        with patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send:
+            await api.set_color(215, 150, 255)
+            await api.set_brightness(181)
+
+        assert mock_send.call_args_list[0].args[0] == "SCd796ffff"
+        assert mock_send.call_args_list[1].args[0] == "SCd796ffb5"
+        assert api.color == (215, 150, 255)
+        assert api.brightness == 181
+
+    @pytest.mark.asyncio
+    async def test_commands_update_cached_state(self, api: PyHatchBabyRestAsync):
+        """Test commands update cached state without reading it back."""
+        with patch.object(api, "_send_command", new_callable=AsyncMock):
+            await api.turn_power_on()
+            assert api.power is True
+
+            await api.turn_power_off()
+            assert api.power is False
+
+            await api.set_sound(PyHatchBabyRestSound.rain)
+            assert api.sound == PyHatchBabyRestSound.rain
+
+            await api.set_volume(128)
+            assert api.volume == 128
+
+    @pytest.mark.asyncio
+    async def test_set_brightness_without_cached_color(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test brightness can be set before any color is known."""
+        with patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send:
+            await api.set_brightness(200)
+
+        mock_send.assert_called_once_with("SCffffffc8")
+
+    @pytest.mark.asyncio
+    async def test_send_command_does_not_read_back(self, api: PyHatchBabyRestAsync):
+        """Test _send_command does not connect again just to re-read state."""
+        mock_client = AsyncMock()
+        api._client = mock_client
+
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+            patch.object(api, "refresh_data", new_callable=AsyncMock) as mock_refresh,
+        ):
+            await api._send_command("SI01")
+
+        mock_refresh.assert_not_called()
+        mock_client.read_gatt_char.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_send_command_writes_to_characteristic(
         self, api: PyHatchBabyRestAsync
     ):
@@ -247,10 +310,11 @@ class TestPyHatchBabyRestAsync:
         mock_client.write_gatt_char = AsyncMock()
         api._client = mock_client
 
-        with patch.object(api, "_client_connect", new_callable=AsyncMock):
-            with patch.object(api, "refresh_data", new_callable=AsyncMock):
-                with patch("asyncio.sleep", new_callable=AsyncMock):
-                    await api._send_command("SI01")
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+        ):
+            await api._send_command("SI01")
 
         mock_client.write_gatt_char.assert_called_once_with(
             char_specifier=CHAR_TX,

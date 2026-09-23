@@ -276,9 +276,7 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("Exception during _send_command -- %r", e)
 
         self._set_active_operations(-1)
-        # seemingly need some time for Hatch Rest to "catch up"
-        await asyncio.sleep(1)
-        await self.refresh_data()
+        await self._client_disconnect()
 
         if log_timing:
             _LOGGER.debug(
@@ -333,37 +331,56 @@ class PyHatchBabyRestAsync:
         """Power on the Hatch Rest device."""
         command = f"SI{1:02x}"
         _LOGGER.debug("API command: turn_power_on")
+        self.power = True
         await self._send_command(command)
 
     async def turn_power_off(self):
         """Power off the Hatch Rest device."""
         command = f"SI{0:02x}"
         _LOGGER.debug("API command: turn_power_off")
+        self.power = False
         await self._send_command(command)
 
     async def set_sound(self, sound: int):
         """Set the sound of the Hatch Rest device."""
         command = f"SN{sound:02x}"
         _LOGGER.debug("API command: set_sound to %s", command)
+        self.sound = PyHatchBabyRestSound(sound)
         return await self._send_command(command)
 
     async def set_volume(self, volume: int):
         """Set the volume of the Hatch Rest device."""
         command = f"SV{volume:02x}"
         _LOGGER.debug("API command: set_volume to %s", command)
+        self.volume = volume
         return await self._send_command(command)
 
     async def set_color(self, red: int, green: int, blue: int):
         """Set the color of the Hatch Rest device."""
-        command = f"SC{red:02x}{green:02x}{blue:02x}{self.brightness:02x}"
-        _LOGGER.debug("API command: set_color to %s", command)
-        return await self._send_command(command)
+        return await self.set_color_and_brightness(
+            red, green, blue, self.brightness if self.brightness is not None else 255
+        )
 
     async def set_brightness(self, brightness: int):
         """Set the brightness of the Hatch Rest device."""
-        if self.color:
-            command = f"SC{self.color[0]:02x}{self.color[1]:02x}{self.color[2]:02x}{brightness:02x}"
-        _LOGGER.debug("API command: set_brightness to %s", command)
+        red, green, blue = self.color if self.color is not None else (255, 255, 255)
+        return await self.set_color_and_brightness(red, green, blue, brightness)
+
+    async def set_color_and_brightness(
+        self, red: int, green: int, blue: int, brightness: int
+    ):
+        """Set color and brightness together.
+
+        The device takes both in a single command, so callers changing both
+        should use this rather than paying for two round trips.
+        """
+        command = f"SC{red:02x}{green:02x}{blue:02x}{brightness:02x}"
+        _LOGGER.debug("API command: set_color_and_brightness to %s", command)
+        # Keep the cache in step with what was just written: set_color and
+        # set_brightness each build their command from the other's cached
+        # value, so a stale cache would make consecutive calls fight.
+        self.color = (red, green, blue)
+        self.brightness = brightness
         return await self._send_command(command)
 
     @property
