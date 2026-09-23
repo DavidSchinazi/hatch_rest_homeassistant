@@ -107,6 +107,25 @@ class TestHatchBabyRestLight:
         light_entity._hatch_rest_device.set_color.assert_called_once_with(255, 0, 128)
 
     @pytest.mark.asyncio
+    async def test_async_turn_on_with_brightness_and_rgb(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test setting both takes a single command."""
+        light_entity._hatch_rest_device.set_color_and_brightness = AsyncMock()
+        light_entity._hatch_rest_device.set_brightness = AsyncMock()
+        light_entity._hatch_rest_device.set_color = AsyncMock()
+
+        await light_entity.async_turn_on(
+            **{ATTR_BRIGHTNESS: 181, ATTR_RGB_COLOR: (215, 150, 255)}
+        )
+
+        light_entity._hatch_rest_device.set_color_and_brightness.assert_called_once_with(
+            215, 150, 255, 181
+        )
+        light_entity._hatch_rest_device.set_brightness.assert_not_called()
+        light_entity._hatch_rest_device.set_color.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_async_turn_on_powers_on_if_needed(
         self, light_entity: HatchBabyRestLight
     ):

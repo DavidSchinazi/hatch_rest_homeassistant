@@ -83,11 +83,16 @@ class HatchBabyRestLight(HatchBabyRestEntity, LightEntity):  # pyright: ignore[r
             _LOGGER.debug("light _hatch_rest_device power not on -- turning on")
             await self._hatch_rest_device.turn_power_on()
 
-        if brightness:
+        # The device takes color and brightness in one command, so setting
+        # both is a single round trip.
+        if brightness and rgb:
+            _LOGGER.debug("light setting RGB = %s and brightness = %s", rgb, brightness)
+            await self._hatch_rest_device.set_color_and_brightness(*rgb, brightness)
+        elif brightness:
             _LOGGER.debug("light setting brightness = %s", brightness)
             await self._hatch_rest_device.set_brightness(brightness)
-        if rgb:
-            _LOGGER.debug("light setting RBG = (%s[0], %s[1], %s[2])", *rgb)
+        elif rgb:
+            _LOGGER.debug("light setting RGB = %s", rgb)
             await self._hatch_rest_device.set_color(*rgb)
 
         # https://developers.home-assistant.io/docs/integration_fetching_data/
