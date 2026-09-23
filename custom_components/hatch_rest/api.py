@@ -21,14 +21,51 @@ from bleak_retry_connector import (
     establish_connection,
 )
 
-from .const import CHAR_FEEDBACK, CHAR_TX, PyHatchBabyRestSound
+from .const import (
+    ADVERTISEMENT_COLOR_INDEX,
+    ADVERTISEMENT_POWER_INDEX,
+    ADVERTISEMENT_SOUND_INDEX,
+    CHAR_FEEDBACK,
+    CHAR_TX,
+    FEEDBACK_COLOR_INDEX,
+    FEEDBACK_POWER_INDEX,
+    FEEDBACK_SOUND_INDEX,
+    MARKER_COLOR,
+    MARKER_POWER,
+    MARKER_SOUND,
+    POWER_OFF_MASK,
+    PyHatchBabyRestSound,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _assert_value(check_val: list[str], index: int, assert_val: str):
-    if check_val[index] != assert_val:
-        raise ValueError(f'response[{index}] "{check_val[index]}" != "{assert_val}"')
+def _assert_marker(data: bytes, index: int, marker: int):
+    if data[index] != marker:
+        raise ValueError(f"data[{index}] {data[index]:#04x} != {marker:#04x}")
+
+
+def _parse_state(
+    data: bytes, color_index: int, sound_index: int, power_index: int
+) -> dict:
+    """Parse device state out of a feedback or advertisement payload.
+
+    Both payloads carry the same color / sound / power blocks, just at
+    different offsets, so the two code paths share this parser.
+    """
+    _assert_marker(data, color_index, MARKER_COLOR)
+    _assert_marker(data, sound_index, MARKER_SOUND)
+    _assert_marker(data, power_index, MARKER_POWER)
+
+    red, green, blue, brightness = data[color_index + 1 : color_index + 5]
+
+    return {
+        "color": (red, green, blue),
+        "brightness": brightness,
+        "sound": PyHatchBabyRestSound(data[sound_index + 1]),
+        "volume": data[sound_index + 2],
+        "power": not bool(POWER_OFF_MASK & data[power_index + 1]),
+    }
 
 
 class PyHatchBabyRestAsync:
@@ -143,6 +180,73 @@ class PyHatchBabyRestAsync:
                 self._active_operations,
             )
 
+    async def async_stop(self) -> None:
+        """Disconnect and stop talking to the device."""
+        _LOGGER.debug("Stopping API for %s", self.address)
+        self._active_operations = 0
+        await self._client_disconnect()
+
+    def _apply_state(self, state: dict, source: str) -> bool:
+        """Store parsed state, returning whether anything changed."""
+        changed = (
+            self.color,
+            self.brightness,
+            self.sound,
+            self.volume,
+            self.power,
+        ) != (
+            state["color"],
+            state["brightness"],
+            state["sound"],
+            state["volume"],
+            state["power"],
+        )
+
+        self.color = state["color"]
+        self.brightness = state["brightness"]
+        self.sound = state["sound"]
+        self.volume = state["volume"]
+        self.power = state["power"]
+
+        _LOGGER.debug(
+            "%s state: color=%s brightness=%s sound=%s volume=%s power=%s (changed=%s)",
+            source,
+            self.color,
+            self.brightness,
+            self.sound,
+            self.volume,
+            self.power,
+            changed,
+        )
+        return changed
+
+    def update_from_advertisement(self, manufacturer_data: bytes | None) -> bool:
+        """Update state from a manufacturer specific advertisement payload.
+
+        The advertisement carries the same state as the feedback
+        characteristic, so no connection is needed to stay up to date.
+        Returns whether anything changed.
+        """
+        if not manufacturer_data:
+            return False
+
+        try:
+            state = _parse_state(
+                manufacturer_data,
+                ADVERTISEMENT_COLOR_INDEX,
+                ADVERTISEMENT_SOUND_INDEX,
+                ADVERTISEMENT_POWER_INDEX,
+            )
+        except (IndexError, ValueError) as e:
+            _LOGGER.debug(
+                "Ignoring unparseable advertisement %s -- %r",
+                manufacturer_data.hex(),
+                e,
+            )
+            return False
+
+        return self._apply_state(state, "advertisement")
+
     async def _send_command(self, command: str):
         """Send a command do the device.
 
@@ -196,30 +300,15 @@ class PyHatchBabyRestAsync:
             raw_char_read = await self._client.read_gatt_char(CHAR_FEEDBACK)  # pyright: ignore[reportOptionalMemberAccess]
             _LOGGER.debug("Raw char read from refresh_data: %s", raw_char_read)
 
-            response = [hex(x) for x in raw_char_read]
-
-            # Make sure the data is where we think it is
-            _assert_value(response, 5, "0x43")  # color
-            _assert_value(response, 10, "0x53")  # audio
-            _assert_value(response, 13, "0x50")  # power
-
-            red, green, blue, brightness = [int(x, 16) for x in response[6:10]]
-
-            sound = PyHatchBabyRestSound(int(response[11], 16))
-            volume = int(response[12], 16)
-
-            power = not bool(int("11000000", 2) & int(response[14], 16))
-
-            self.color = (red, green, blue)
-            _LOGGER.debug("refresh_data color: %s", self.color)
-            self.brightness = brightness
-            _LOGGER.debug("refresh_data brightness: %s", self.brightness)
-            self.sound = sound
-            _LOGGER.debug("refresh_data sound: %s", self.sound)
-            self.volume = volume
-            _LOGGER.debug("refresh_data volume: %s", self.volume)
-            self.power = power
-            _LOGGER.debug("refresh_data power: %s", self.power)
+            self._apply_state(
+                _parse_state(
+                    raw_char_read,
+                    FEEDBACK_COLOR_INDEX,
+                    FEEDBACK_SOUND_INDEX,
+                    FEEDBACK_POWER_INDEX,
+                ),
+                "refresh_data",
+            )
 
         except (
             BleakNotFoundError,

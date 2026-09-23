@@ -1,12 +1,21 @@
 """Hatch Rest integration."""
 
+import logging
+
 from homeassistant import config_entries, core
 from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothScanningMode,
+)
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import PyHatchBabyRestAsync
+from .const import MANUFACTURER_ID
 from .coordinator import HatchBabyRestUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.LIGHT, Platform.MEDIA_PLAYER, Platform.SWITCH]
 
@@ -32,15 +41,31 @@ async def async_setup_entry(
     )
     entry.runtime_data = coordinator
 
-    # Fetch initial data so we have data when entities subscribe
-    #
-    # If the refresh fails, async_config_entry_first_refresh will
-    # raise ConfigEntryNotReady and setup will try again later
-    #
-    # If you do not want to retry setup on failure, use
-    # coordinator.async_refresh() instead
+    # Keep state up to date from advertisements, which need no connection.
+    entry.async_on_unload(
+        bluetooth.async_register_callback(
+            hass,
+            coordinator.async_handle_advertisement,
+            BluetoothCallbackMatcher(address=address.upper(), connectable=True),
+            BluetoothScanningMode.PASSIVE,
+        )
+    )
+    entry.async_on_unload(hatch_rest_device.async_stop)
 
-    await coordinator.async_config_entry_first_refresh()
+    # Seed from the most recent advertisement if there is one, so startup does
+    # not need a connection. Otherwise fall back to reading over GATT, which
+    # raises ConfigEntryNotReady on failure so setup is retried later.
+    service_info = bluetooth.async_last_service_info(
+        hass, address.upper(), connectable=True
+    )
+    if service_info is not None and hatch_rest_device.update_from_advertisement(
+        service_info.manufacturer_data.get(MANUFACTURER_ID)
+    ):
+        _LOGGER.debug("Seeded initial state from advertisement for %s", address)
+        coordinator.async_set_updated_data(coordinator.get_current_data())
+    else:
+        await coordinator.async_config_entry_first_refresh()
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True

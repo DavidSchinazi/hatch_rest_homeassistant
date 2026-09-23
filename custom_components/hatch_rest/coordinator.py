@@ -3,7 +3,11 @@
 from datetime import timedelta
 import logging
 
-from homeassistant.core import HomeAssistant
+from homeassistant.components.bluetooth import (
+    BluetoothChange,
+    BluetoothServiceInfoBleak,
+)
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import (
@@ -13,7 +17,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .api import PyHatchBabyRestAsync
-from .const import DOMAIN, PyHatchBabyRestSound
+from .const import DOMAIN, MANUFACTURER_ID, PyHatchBabyRestSound
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,13 +36,26 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=60),
+            # State normally arrives from advertisements, which need no
+            # connection. This poll is only a fallback for a device that
+            # stops advertising.
+            update_interval=timedelta(minutes=10),
         )
         self.unique_id = unique_id
         self.hatch_rest_device = hatch_rest_device
         self._last_data: dict[
             str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None
         ] = {}
+
+    @callback
+    def async_handle_advertisement(
+        self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
+    ) -> None:
+        """Update state from a Bluetooth advertisement."""
+        if self.hatch_rest_device.update_from_advertisement(
+            service_info.manufacturer_data.get(MANUFACTURER_ID)
+        ):
+            self.async_set_updated_data(self.get_current_data())
 
     def get_current_data(
         self,

@@ -6,23 +6,84 @@ import pytest
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakConnectionError
 
-from custom_components.hatch_rest.api import PyHatchBabyRestAsync, _assert_value
-from custom_components.hatch_rest.const import CHAR_TX, PyHatchBabyRestSound
+from custom_components.hatch_rest.api import (
+    PyHatchBabyRestAsync,
+    _assert_marker,
+    _parse_state,
+)
+from custom_components.hatch_rest.const import (
+    ADVERTISEMENT_COLOR_INDEX,
+    ADVERTISEMENT_POWER_INDEX,
+    ADVERTISEMENT_SOUND_INDEX,
+    CHAR_TX,
+    FEEDBACK_COLOR_INDEX,
+    FEEDBACK_POWER_INDEX,
+    FEEDBACK_SOUND_INDEX,
+    MARKER_COLOR,
+    PyHatchBabyRestSound,
+)
+
+# Payloads captured from a Rest 1st Gen. The advertisement and the feedback
+# characteristic were read from the same device within seconds of each other,
+# and describe the same state.
+ADVERTISEMENT = bytes.fromhex("5254f8001ccc43fdd12d7f53055445000000000050df6500")
+FEEDBACK = bytes.fromhex("54f8001c9643fdd12d7f53055450df6500000000")
 
 
-class TestAssertValue:
-    """Tests for _assert_value helper."""
+class TestAssertMarker:
+    """Tests for _assert_marker helper."""
 
-    def test_assert_value_passes(self):
-        """Test assertion passes with matching value."""
-        values = ["0x00", "0x43", "0x53"]
-        _assert_value(values, 1, "0x43")  # Should not raise
+    def test_assert_marker_passes(self):
+        """Test assertion passes with matching marker."""
+        _assert_marker(b"\x00\x43\x53", 1, MARKER_COLOR)  # Should not raise
 
-    def test_assert_value_fails(self):
-        """Test assertion fails with mismatched value."""
-        values = ["0x00", "0x43", "0x53"]
-        with pytest.raises(ValueError, match='response\\[1\\] "0x43" != "0x99"'):
-            _assert_value(values, 1, "0x99")
+    def test_assert_marker_fails(self):
+        """Test assertion fails with mismatched marker."""
+        with pytest.raises(ValueError, match="data\\[1\\] 0x43 != 0x99"):
+            _assert_marker(b"\x00\x43\x53", 1, 0x99)
+
+
+class TestParseState:
+    """Tests for _parse_state against payloads captured from a device."""
+
+    def test_parse_feedback(self):
+        """Test parsing the feedback characteristic."""
+        assert _parse_state(
+            FEEDBACK,
+            FEEDBACK_COLOR_INDEX,
+            FEEDBACK_SOUND_INDEX,
+            FEEDBACK_POWER_INDEX,
+        ) == {
+            "color": (253, 209, 45),
+            "brightness": 127,
+            "sound": PyHatchBabyRestSound.ocean,
+            "volume": 84,
+            "power": False,
+        }
+
+    def test_parse_advertisement_matches_feedback(self):
+        """Test the advertisement describes the same state as the feedback."""
+        assert _parse_state(
+            ADVERTISEMENT,
+            ADVERTISEMENT_COLOR_INDEX,
+            ADVERTISEMENT_SOUND_INDEX,
+            ADVERTISEMENT_POWER_INDEX,
+        ) == _parse_state(
+            FEEDBACK,
+            FEEDBACK_COLOR_INDEX,
+            FEEDBACK_SOUND_INDEX,
+            FEEDBACK_POWER_INDEX,
+        )
+
+    def test_parse_rejects_misaligned_payload(self):
+        """Test a payload without the expected markers is rejected."""
+        with pytest.raises(ValueError):
+            _parse_state(
+                ADVERTISEMENT,
+                FEEDBACK_COLOR_INDEX,
+                FEEDBACK_SOUND_INDEX,
+                FEEDBACK_POWER_INDEX,
+            )
 
 
 class TestPyHatchBabyRestAsync:

@@ -1,13 +1,18 @@
 """Tests for Hatch Rest coordinator."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.hatch_rest.const import DOMAIN, PyHatchBabyRestSound
+from custom_components.hatch_rest.api import PyHatchBabyRestAsync
+from custom_components.hatch_rest.const import (
+    DOMAIN,
+    MANUFACTURER_ID,
+    PyHatchBabyRestSound,
+)
 from custom_components.hatch_rest.coordinator import (
     HatchBabyRestEntity,
     HatchBabyRestUpdateCoordinator,
@@ -28,7 +33,56 @@ class TestHatchBabyRestUpdateCoordinator:
         assert coordinator.unique_id == "aabbccddeeff"
         assert coordinator.hatch_rest_device == mock_hatch_api
         assert coordinator.name == DOMAIN
-        assert coordinator.update_interval == timedelta(seconds=60)
+        assert coordinator.update_interval == timedelta(minutes=10)
+
+    def test_handle_advertisement_updates_listeners(
+        self, hass: HomeAssistant, mock_ble_device
+    ):
+        """Test an advertisement updates state without a connection."""
+        coordinator = HatchBabyRestUpdateCoordinator(
+            hass,
+            unique_id="aabbccddeeff",
+            hatch_rest_device=PyHatchBabyRestAsync(mock_ble_device),
+        )
+        service_info = MagicMock()
+        service_info.manufacturer_data = {
+            MANUFACTURER_ID: bytes.fromhex(
+                "5254f8001ccc43fdd12d7f53055445000000000050df6500"
+            )
+        }
+
+        coordinator.async_handle_advertisement(service_info, MagicMock())
+
+        assert coordinator.data["color"] == (253, 209, 45)
+        assert coordinator.data["brightness"] == 127
+        assert coordinator.data["sound"] == PyHatchBabyRestSound.ocean
+        assert coordinator.data["volume"] == 84
+        assert coordinator.data["power"] is False
+
+    def test_handle_advertisement_ignores_unchanged(
+        self, hass: HomeAssistant, mock_ble_device
+    ):
+        """Test a repeated advertisement does not re-notify listeners."""
+        coordinator = HatchBabyRestUpdateCoordinator(
+            hass,
+            unique_id="aabbccddeeff",
+            hatch_rest_device=PyHatchBabyRestAsync(mock_ble_device),
+        )
+        service_info = MagicMock()
+        service_info.manufacturer_data = {
+            MANUFACTURER_ID: bytes.fromhex(
+                "5254f8001ccc43fdd12d7f53055445000000000050df6500"
+            )
+        }
+        coordinator.async_handle_advertisement(service_info, MagicMock())
+
+        listener = MagicMock()
+        unsub = coordinator.async_add_listener(listener)
+        listener.reset_mock()
+        coordinator.async_handle_advertisement(service_info, MagicMock())
+        unsub()
+
+        listener.assert_not_called()
 
     def test_get_current_data(self, mock_coordinator: HatchBabyRestUpdateCoordinator):
         """Test get_current_data returns device state."""
