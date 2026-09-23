@@ -1,5 +1,6 @@
 """Tests for Hatch Rest API."""
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -90,9 +91,11 @@ class TestPyHatchBabyRestAsync:
     """Tests for PyHatchBabyRestAsync."""
 
     @pytest.fixture
-    def api(self, mock_ble_device: BLEDevice) -> PyHatchBabyRestAsync:
-        """Create API instance."""
-        return PyHatchBabyRestAsync(mock_ble_device)
+    def api(self, mock_ble_device: BLEDevice) -> Generator[PyHatchBabyRestAsync]:
+        """Create API instance, cancelling any pending idle disconnect."""
+        api = PyHatchBabyRestAsync(mock_ble_device)
+        yield api
+        api._cancel_idle_disconnect()
 
     def test_init(self, api: PyHatchBabyRestAsync, mock_ble_device: BLEDevice):
         """Test API initialization."""
@@ -276,9 +279,7 @@ class TestPyHatchBabyRestAsync:
             assert api.volume == 128
 
     @pytest.mark.asyncio
-    async def test_set_brightness_without_cached_color(
-        self, api: PyHatchBabyRestAsync
-    ):
+    async def test_set_brightness_without_cached_color(self, api: PyHatchBabyRestAsync):
         """Test brightness can be set before any color is known."""
         with patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send:
             await api.set_brightness(200)
@@ -321,6 +322,52 @@ class TestPyHatchBabyRestAsync:
             data=bytearray("SI01", "utf-8"),
             response=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_send_command_schedules_idle_disconnect(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the connection is left open for a later idle disconnect."""
+        mock_client = AsyncMock()
+        api._client = mock_client
+
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock) as mock_dc,
+        ):
+            await api._send_command("SI01")
+            assert api._disconnect_timer is not None
+            mock_dc.assert_not_called()
+
+            api._cancel_idle_disconnect()
+
+        assert api._disconnect_timer is None
+
+    @pytest.mark.asyncio
+    async def test_client_connect_cancels_idle_disconnect(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test new work cancels a pending idle disconnect."""
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+        api._client = mock_client
+        api._schedule_idle_disconnect()
+
+        await api._client_connect()
+
+        assert api._disconnect_timer is None
+
+    @pytest.mark.asyncio
+    async def test_async_stop_disconnects(self, api: PyHatchBabyRestAsync):
+        """Test async_stop cancels the timer and disconnects."""
+        mock_client = AsyncMock()
+        api._client = mock_client
+        api._schedule_idle_disconnect()
+
+        await api.async_stop()
+
+        assert api._disconnect_timer is None
+        mock_client.disconnect.assert_called_once()
 
     def test_active_operations_tracking(self, api: PyHatchBabyRestAsync):
         """Test active operations counter."""

@@ -30,6 +30,7 @@ from .const import (
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
     FEEDBACK_SOUND_INDEX,
+    IDLE_DISCONNECT_SECONDS,
     MARKER_COLOR,
     MARKER_POWER,
     MARKER_SOUND,
@@ -78,6 +79,8 @@ class PyHatchBabyRestAsync:
 
         self._client: BleakClientWithServiceCache | None = None
         self._active_operations: int = 0
+        self._disconnect_timer: asyncio.TimerHandle | None = None
+        self._disconnect_task: asyncio.Task | None = None
 
         # connection synchronization primitizes / state
         self._connection_cv = asyncio.Condition()
@@ -103,10 +106,36 @@ class PyHatchBabyRestAsync:
     def _client_disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Callback for when the client disconnects."""
         _LOGGER.debug("API client has successfully disconnected")
+        self._cancel_idle_disconnect()
         self._client = None
+
+    def _schedule_idle_disconnect(self) -> None:
+        """Disconnect once the device has been idle for a while.
+
+        Reconnecting costs up to a second, so holding the connection open
+        makes a burst of commands much faster than connecting per command.
+        """
+        self._cancel_idle_disconnect()
+        self._disconnect_timer = asyncio.get_running_loop().call_later(
+            IDLE_DISCONNECT_SECONDS, self._idle_disconnect
+        )
+
+    def _cancel_idle_disconnect(self) -> None:
+        """Cancel a pending idle disconnect."""
+        if self._disconnect_timer is not None:
+            self._disconnect_timer.cancel()
+            self._disconnect_timer = None
+
+    def _idle_disconnect(self) -> None:
+        """Handle the idle timer firing."""
+        self._disconnect_timer = None
+        _LOGGER.debug("Idle for %ds, disconnecting", IDLE_DISCONNECT_SECONDS)
+        self._disconnect_task = asyncio.create_task(self._client_disconnect())
 
     async def _client_connect(self) -> None:
         """Connect to the device."""
+        self._cancel_idle_disconnect()
+
         async with self._connection_cv:
             if self._client and self._client.is_connected:
                 _LOGGER.debug(
@@ -183,6 +212,7 @@ class PyHatchBabyRestAsync:
     async def async_stop(self) -> None:
         """Disconnect and stop talking to the device."""
         _LOGGER.debug("Stopping API for %s", self.address)
+        self._cancel_idle_disconnect()
         self._active_operations = 0
         await self._client_disconnect()
 
@@ -276,7 +306,7 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("Exception during _send_command -- %r", e)
 
         self._set_active_operations(-1)
-        await self._client_disconnect()
+        self._schedule_idle_disconnect()
 
         if log_timing:
             _LOGGER.debug(
@@ -318,7 +348,7 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("Exception during refresh_data -- %r", e)
 
         self._set_active_operations(-1)
-        await self._client_disconnect()
+        self._schedule_idle_disconnect()
 
         if log_timing:
             _LOGGER.debug(

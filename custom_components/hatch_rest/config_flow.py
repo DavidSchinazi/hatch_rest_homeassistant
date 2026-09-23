@@ -69,6 +69,9 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 raise ValueError("BLEDevice does not exist")  # noqa: TRY301
             hatch_rest_device = PyHatchBabyRestAsync(ble_device)
             await hatch_rest_device.refresh_data()
+            # Nothing is sent again until the entry is set up, so do not hold
+            # the connection open waiting for the idle timer.
+            await hatch_rest_device.async_stop()
         except Exception as e:  # noqa: BLE001
             _LOGGER.debug("Unexpected error during async_step_bluetooth: %r", e)
             return self.async_abort(reason="unknown")
@@ -137,6 +140,7 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     raise ValueError("BLEDevice does not exist")  # noqa: TRY301
                 hatch_rest_device = PyHatchBabyRestAsync(ble_device)
                 await hatch_rest_device.refresh_data()
+                await hatch_rest_device.async_stop()
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("Unexpected error during async_step_user: %r", e)
                 return self.async_abort(reason="unknown")
