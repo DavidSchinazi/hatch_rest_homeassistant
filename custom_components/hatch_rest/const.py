@@ -43,6 +43,12 @@ ADVERTISEMENT_POWER_INDEX = 20
 ACTIVE_SCAN_INTERVAL_SECONDS = 60
 ACTIVE_SCAN_DURATION_SECONDS = 35
 
+# How long to wait for a connection. establish_connection retries internally
+# with no overall deadline, so an unreachable device can otherwise block for
+# minutes -- and block every other caller behind it, since a connection
+# attempt holds off the ones waiting on it.
+CONNECT_TIMEOUT_SECONDS = 20
+
 # How long to keep a connection open after the last operation.
 IDLE_DISCONNECT_SECONDS = 30
 

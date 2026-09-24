@@ -28,6 +28,7 @@ from .const import (
     CHAR_FEEDBACK,
     CHAR_TX,
     COMMAND_SETTLE_SECONDS,
+    CONNECT_TIMEOUT_SECONDS,
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
     FEEDBACK_SOUND_INDEX,
@@ -159,15 +160,17 @@ class PyHatchBabyRestAsync:
             self._connecting = True
 
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                self.device,
-                self.device.address,
-                disconnected_callback=self._client_disconnected,
-            )
+            async with asyncio.timeout(CONNECT_TIMEOUT_SECONDS):
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    self.device,
+                    self.device.address,
+                    disconnected_callback=self._client_disconnected,
+                )
             _LOGGER.debug("Client connected: %s", client.is_connected)
 
         except (
+            TimeoutError,
             BleakNotFoundError,
             BleakOutOfConnectionSlotsError,
             BleakAbortedError,

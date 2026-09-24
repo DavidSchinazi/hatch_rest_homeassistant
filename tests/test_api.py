@@ -1,5 +1,6 @@
 """Tests for Hatch Rest API."""
 
+import asyncio
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -135,6 +136,54 @@ class TestPyHatchBabyRestAsync:
         ):
             await api._client_connect()
             assert api._client is None
+
+    @pytest.mark.asyncio
+    async def test_client_connect_times_out(self, api: PyHatchBabyRestAsync):
+        """Test a connection that never completes is given up on.
+
+        establish_connection retries internally with no overall deadline, so
+        without a timeout an unreachable device blocks setup and every other
+        caller waiting behind this one.
+        """
+
+        async def never_connects(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        with (
+            patch(
+                "custom_components.hatch_rest.api.establish_connection",
+                never_connects,
+            ),
+            patch("custom_components.hatch_rest.api.CONNECT_TIMEOUT_SECONDS", 0.05),
+        ):
+            await asyncio.wait_for(api._client_connect(), timeout=5)
+
+        assert api._client is None
+        assert api._connecting is False
+
+    @pytest.mark.asyncio
+    async def test_client_connect_timeout_releases_waiters(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test callers queued behind a stuck connection are released."""
+
+        async def never_connects(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        with (
+            patch(
+                "custom_components.hatch_rest.api.establish_connection",
+                never_connects,
+            ),
+            patch("custom_components.hatch_rest.api.CONNECT_TIMEOUT_SECONDS", 0.05),
+        ):
+            first = asyncio.create_task(api._client_connect())
+            await asyncio.sleep(0)  # let the first caller claim the connect
+            second = asyncio.create_task(api._client_connect())
+
+            await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+
+        assert api._client is None
 
     @pytest.mark.asyncio
     async def test_client_disconnect_when_idle(self, api: PyHatchBabyRestAsync):
