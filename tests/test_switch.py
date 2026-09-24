@@ -47,13 +47,10 @@ class TestHatchBabyRestSwitch:
         """Test turning on when switch is off."""
         switch_entity.coordinator.data["power"] = False
         switch_entity._hatch_rest_device.turn_power_on = AsyncMock()
-        switch_entity.coordinator.async_set_updated_data = AsyncMock()
-        switch_entity.coordinator.get_current_data = lambda: {"power": True}
 
         await switch_entity.async_turn_on()
 
         switch_entity._hatch_rest_device.turn_power_on.assert_called_once()
-        switch_entity.coordinator.async_set_updated_data.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_turn_on_when_already_on(
@@ -72,13 +69,10 @@ class TestHatchBabyRestSwitch:
         """Test turning off when switch is on."""
         switch_entity.coordinator.data["power"] = True
         switch_entity._hatch_rest_device.turn_power_off = AsyncMock()
-        switch_entity.coordinator.async_set_updated_data = AsyncMock()
-        switch_entity.coordinator.get_current_data = lambda: {"power": False}
 
         await switch_entity.async_turn_off()
 
         switch_entity._hatch_rest_device.turn_power_off.assert_called_once()
-        switch_entity.coordinator.async_set_updated_data.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_turn_off_when_already_off(

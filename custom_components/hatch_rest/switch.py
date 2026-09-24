@@ -47,18 +47,8 @@ class HatchBabyRestSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright: ignore
             _LOGGER.debug("switch setting on")
             await self._hatch_rest_device.turn_power_on()
 
-            # https://developers.home-assistant.io/docs/integration_fetching_data/
-            # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-            # each _send_command calls _refresh_data and updates API data states, so use that
-            self.coordinator.async_set_updated_data(self.coordinator.get_current_data())
-
     async def async_turn_off(self, **_):
         """Turn off the Hatch Rest device."""
         if self.is_on:
             _LOGGER.debug("switch setting off")
             await self._hatch_rest_device.turn_power_off()
-
-            # https://developers.home-assistant.io/docs/integration_fetching_data/
-            # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-            # each _send_command calls _refresh_data and updates API data states, so use that
-            self.coordinator.async_set_updated_data(self.coordinator.get_current_data())

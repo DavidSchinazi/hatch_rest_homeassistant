@@ -109,11 +109,6 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
         _LOGGER.debug("media_player setting volume_level = %s", int(255 * volume))
         await self._hatch_rest_device.set_volume(int(255 * volume))
 
-        # https://developers.home-assistant.io/docs/integration_fetching_data/
-        # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-        # each _send_command calls _refresh_data and updates API data states, so use that
-        self.coordinator.async_set_updated_data(self.coordinator.get_current_data())
-
     async def async_select_source(self, source: str) -> None:
         """Select a source from the list of available sources."""
         source_number = PyHatchBabyRestSound[source.lower()]
@@ -125,11 +120,6 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
         )
         await self._hatch_rest_device.set_sound(source_number)
 
-        # https://developers.home-assistant.io/docs/integration_fetching_data/
-        # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-        # each _send_command calls _refresh_data and updates API data states, so use that
-        self.coordinator.async_set_updated_data(self.coordinator.get_current_data())
-
     async def async_media_pause(self) -> None:
         """Pause the media player."""
         self._previous_sound = self._hatch_rest_device.sound
@@ -139,11 +129,6 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
             PyHatchBabyRestSound.none.name,
         )
         await self._hatch_rest_device.set_sound(PyHatchBabyRestSound.none)
-
-        # https://developers.home-assistant.io/docs/integration_fetching_data/
-        # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-        # each _send_command calls _refresh_data and updates API data states, so use that
-        self.coordinator.async_set_updated_data(self.coordinator.get_current_data())
 
     async def async_media_play(self) -> None:
         """Play the media player."""
@@ -157,8 +142,3 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
                 PyHatchBabyRestSound(previous_sound).name,
             )
             await self._hatch_rest_device.set_sound(previous_sound)
-
-        # https://developers.home-assistant.io/docs/integration_fetching_data/
-        # If this method is used on a coordinator that polls, it will reset the time until the next time it will poll for data.
-        # each _send_command calls _refresh_data and updates API data states, so use that
-        self.coordinator.async_set_updated_data(self.coordinator.get_current_data())

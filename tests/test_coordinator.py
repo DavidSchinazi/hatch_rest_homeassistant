@@ -1,7 +1,8 @@
 """Tests for Hatch Rest coordinator."""
 
+import asyncio
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -62,6 +63,84 @@ class TestHatchBabyRestUpdateCoordinator:
         await mock_coordinator._async_update_data()
 
         device.refresh_data.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_command_publishes_state_before_the_write_lands(
+        self, hass: HomeAssistant, mock_ble_device
+    ):
+        """Test an entity follows a command without waiting for the device.
+
+        Connecting has been seen to take 11s, so the state a command asks for
+        is published as soon as it is asked for, not once the device has
+        acknowledged it.
+        """
+        device = PyHatchBabyRestAsync(mock_ble_device)
+        coordinator = HatchBabyRestUpdateCoordinator(
+            hass,
+            unique_id="aabbccddeeff",
+            hatch_rest_device=device,
+        )
+        device.power = False
+
+        connected = asyncio.Event()
+
+        async def blocked_connect():
+            await connected.wait()
+            device._client = AsyncMock()
+
+        with patch.object(device, "_client_connect", blocked_connect):
+            command = asyncio.create_task(device.turn_power_on())
+            await asyncio.sleep(0)
+
+            # Still connecting, but the entity already knows.
+            assert command.done() is False
+            assert coordinator.data["power"] is True
+
+            connected.set()
+            await asyncio.wait_for(command, timeout=5)
+
+        device._cancel_idle_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_advertisement_during_a_command_does_not_revert_it(
+        self, hass: HomeAssistant, mock_ble_device
+    ):
+        """Test a stale advertisement mid-command does not undo the command.
+
+        The settle window has to cover the connection too, not just the
+        moment after the write.
+        """
+        device = PyHatchBabyRestAsync(mock_ble_device)
+        coordinator = HatchBabyRestUpdateCoordinator(
+            hass,
+            unique_id="aabbccddeeff",
+            hatch_rest_device=device,
+        )
+        service_info = MagicMock()
+        service_info.manufacturer_data = {
+            MANUFACTURER_ID: bytes.fromhex(
+                "5254f8001ccc43fdd12d7f53055445000000000050df6500"
+            )
+        }
+
+        connected = asyncio.Event()
+
+        async def blocked_connect():
+            await connected.wait()
+            device._client = AsyncMock()
+
+        with patch.object(device, "_client_connect", blocked_connect):
+            command = asyncio.create_task(device.turn_power_on())
+            await asyncio.sleep(0)
+
+            # The device is still advertising that it is off.
+            coordinator.async_handle_advertisement(service_info, MagicMock())
+            assert coordinator.data["power"] is True
+
+            connected.set()
+            await asyncio.wait_for(command, timeout=5)
+
+        device._cancel_idle_disconnect()
 
     def test_handle_advertisement_updates_listeners(
         self, hass: HomeAssistant, mock_ble_device

@@ -11,6 +11,8 @@ from datetime import datetime
 import logging
 from time import monotonic
 
+from collections.abc import Callable
+
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakAbortedError,
@@ -85,6 +87,7 @@ class PyHatchBabyRestAsync:
         self._disconnect_task: asyncio.Task | None = None
         self._settle_until: float = 0.0
         self._last_advertisement: float | None = None
+        self._state_changed_callback: Callable[[], None] | None = None
 
         # connection synchronization primitizes / state
         self._connection_cv = asyncio.Condition()
@@ -245,7 +248,9 @@ class PyHatchBabyRestAsync:
         self.power = state["power"]
 
         _LOGGER.debug(
-            "%s state: color=%s brightness=%s sound=%s volume=%s power=%s (changed=%s)",
+            "%s %s state: color=%s brightness=%s sound=%s volume=%s power=%s "
+            "(changed=%s)",
+            self.address,
             source,
             self.color,
             self.brightness,
@@ -254,7 +259,24 @@ class PyHatchBabyRestAsync:
             self.power,
             changed,
         )
+
+        if changed:
+            self._notify_state_changed()
         return changed
+
+    def set_state_changed_callback(self, callback: Callable[[], None] | None) -> None:
+        """Set a callback to run whenever the cached state changes.
+
+        Commands update the cache before they are written, so this reports a
+        change as soon as it is asked for rather than once the device has
+        acknowledged it.
+        """
+        self._state_changed_callback = callback
+
+    def _notify_state_changed(self) -> None:
+        """Tell the listener the cached state changed."""
+        if self._state_changed_callback is not None:
+            self._state_changed_callback()
 
     @property
     def has_state(self) -> bool:
@@ -311,6 +333,10 @@ class PyHatchBabyRestAsync:
             _LOGGER.debug("Started _send_command at %s", datetime.now().isoformat())
 
         self._set_active_operations(1)
+        # Hold off advertisements for the whole command, not just from when it
+        # completes: connecting can take seconds, and an advertisement still
+        # describing the old state would undo what was optimistically applied.
+        self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
         await self._client_connect()
 
         try:
@@ -387,6 +413,7 @@ class PyHatchBabyRestAsync:
         command = f"SI{1:02x}"
         _LOGGER.debug("API command: turn_power_on")
         self.power = True
+        self._notify_state_changed()
         await self._send_command(command)
 
     async def turn_power_off(self):
@@ -394,6 +421,7 @@ class PyHatchBabyRestAsync:
         command = f"SI{0:02x}"
         _LOGGER.debug("API command: turn_power_off")
         self.power = False
+        self._notify_state_changed()
         await self._send_command(command)
 
     async def set_sound(self, sound: int):
@@ -401,6 +429,7 @@ class PyHatchBabyRestAsync:
         command = f"SN{sound:02x}"
         _LOGGER.debug("API command: set_sound to %s", command)
         self.sound = PyHatchBabyRestSound(sound)
+        self._notify_state_changed()
         return await self._send_command(command)
 
     async def set_volume(self, volume: int):
@@ -408,6 +437,7 @@ class PyHatchBabyRestAsync:
         command = f"SV{volume:02x}"
         _LOGGER.debug("API command: set_volume to %s", command)
         self.volume = volume
+        self._notify_state_changed()
         return await self._send_command(command)
 
     async def set_color(self, red: int, green: int, blue: int):
@@ -436,6 +466,7 @@ class PyHatchBabyRestAsync:
         # value, so a stale cache would make consecutive calls fight.
         self.color = (red, green, blue)
         self.brightness = brightness
+        self._notify_state_changed()
         return await self._send_command(command)
 
     @property

@@ -52,19 +52,28 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         )
         self.unique_id = unique_id
         self.hatch_rest_device = hatch_rest_device
+        # Commands update the device's cached state before writing it, so
+        # entities can follow a command immediately instead of waiting for a
+        # connection that may take seconds.
+        hatch_rest_device.set_state_changed_callback(self._async_state_changed)
         self._last_data: dict[
             str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None
         ] = {}
+
+    @callback
+    def _async_state_changed(self) -> None:
+        """Publish the device's state after it changed."""
+        self.async_set_updated_data(self.get_current_data())
 
     @callback
     def async_handle_advertisement(
         self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
     ) -> None:
         """Update state from a Bluetooth advertisement."""
-        if self.hatch_rest_device.update_from_advertisement(
+        # A change publishes itself through the state changed callback.
+        self.hatch_rest_device.update_from_advertisement(
             service_info.manufacturer_data.get(MANUFACTURER_ID)
-        ):
-            self.async_set_updated_data(self.get_current_data())
+        )
 
     def get_current_data(
         self,
@@ -79,7 +88,7 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
             "sound": self.hatch_rest_device.sound,
             "volume": self.hatch_rest_device.volume,
         }
-        _LOGGER.debug("Data updated: %s", data)
+        _LOGGER.debug("%s data updated: %s", self.hatch_rest_device.address, data)
         return data
 
     async def _async_update_data(

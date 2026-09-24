@@ -147,29 +147,3 @@ class TestHatchBabyRestLight:
         await light_entity.async_turn_off()
 
         light_entity._hatch_rest_device.set_brightness.assert_called_once_with(0)
-
-    @pytest.mark.asyncio
-    async def test_turn_on_updates_coordinator(self, light_entity: HatchBabyRestLight):
-        """Test turn_on updates coordinator data."""
-        light_entity._hatch_rest_device.power = True
-        light_entity.coordinator.async_set_updated_data = AsyncMock()
-        light_entity.coordinator.get_current_data = lambda: {"brightness": 100}
-
-        await light_entity.async_turn_on()
-
-        light_entity.coordinator.async_set_updated_data.assert_called_once_with(
-            {"brightness": 100}
-        )
-
-    @pytest.mark.asyncio
-    async def test_turn_off_updates_coordinator(self, light_entity: HatchBabyRestLight):
-        """Test turn_off updates coordinator data."""
-        light_entity._hatch_rest_device.set_brightness = AsyncMock()
-        light_entity.coordinator.async_set_updated_data = AsyncMock()
-        light_entity.coordinator.get_current_data = lambda: {"brightness": 0}
-
-        await light_entity.async_turn_off()
-
-        light_entity.coordinator.async_set_updated_data.assert_called_once_with(
-            {"brightness": 0}
-        )
