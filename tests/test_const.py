@@ -1,10 +1,7 @@
 """Tests for Hatch Rest constants."""
 
-from habluetooth.const import (
-    AUTO_WINDOW_MAX_DURATION,
-    MIN_ACTIVE_SCAN_DURATION,
-    MIN_ACTIVE_SCAN_INTERVAL,
-)
+import pytest
+from habluetooth import BluetoothManager
 
 from custom_components.hatch_rest.const import (
     ACTIVE_SCAN_DURATION_SECONDS,
@@ -15,19 +12,28 @@ from custom_components.hatch_rest.const import (
 class TestActiveScanSettings:
     """Tests for the active scan request values.
 
-    async_register_callback passes these straight to habluetooth, which
-    rejects out of range values by raising, failing setup of the entry.
-    Check them against the library's own bounds rather than copied numbers.
+    async_register_callback hands these to habluetooth, which validates them
+    and raises on anything out of range, failing setup of every config entry.
+    Run them through the library's own validation rather than asserting
+    against numbers copied out of it.
     """
 
-    def test_scan_interval_is_accepted(self):
-        """Test the scan interval is not below the library minimum."""
-        assert ACTIVE_SCAN_INTERVAL_SECONDS >= MIN_ACTIVE_SCAN_INTERVAL
+    def test_values_are_accepted(self):
+        """Test habluetooth accepts an active scan request with our values."""
+        manager = BluetoothManager()
 
-    def test_scan_duration_is_accepted(self):
-        """Test the scan duration is not below the library minimum."""
-        assert ACTIVE_SCAN_DURATION_SECONDS >= MIN_ACTIVE_SCAN_DURATION
+        cancel = manager.async_register_active_scan(
+            "AA:BB:CC:DD:EE:FF",
+            ACTIVE_SCAN_INTERVAL_SECONDS,
+            ACTIVE_SCAN_DURATION_SECONDS,
+        )
 
-    def test_scan_duration_is_not_wasted(self):
-        """Test the scan duration is not above what the scheduler will use."""
-        assert ACTIVE_SCAN_DURATION_SECONDS <= AUTO_WINDOW_MAX_DURATION
+        assert callable(cancel)
+        cancel()
+
+    def test_an_interval_below_the_minimum_is_rejected(self):
+        """Test the validation this guards against is really enforced."""
+        manager = BluetoothManager()
+
+        with pytest.raises(ValueError, match="scan_interval"):
+            manager.async_register_active_scan("AA:BB:CC:DD:EE:FF", 15, 10)

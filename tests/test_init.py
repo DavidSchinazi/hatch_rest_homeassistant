@@ -3,10 +3,12 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntry
+from bleak.backends.device import BLEDevice
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hatch_rest import (
     PLATFORMS,
@@ -14,75 +16,88 @@ from custom_components.hatch_rest import (
     async_unload_entry,
     options_update_listener,
 )
-from custom_components.hatch_rest.const import PyHatchBabyRestSound
+from custom_components.hatch_rest.const import DOMAIN, MANUFACTURER_ID
+
+# An advertisement captured from a Rest 1st Gen.
+ADVERTISEMENT = bytes.fromhex("5254f8001ccc43fdd12d7f53055445000000000050df6500")
 
 
 class TestAsyncSetupEntry:
     """Tests for async_setup_entry."""
 
     @pytest.fixture
-    def mock_entry(self) -> MagicMock:
-        """Create mock config entry."""
-        entry = MagicMock(spec=ConfigEntry)
-        entry.entry_id = "test_entry"
-        entry.unique_id = "aabbccddeeff"
-        entry.data = {CONF_ADDRESS: "AA:BB:CC:DD:EE:FF"}
-        entry.runtime_data = None
+    def mock_entry(self, hass: HomeAssistant) -> MockConfigEntry:
+        """Create a real config entry.
+
+        A MagicMock would accept anything async_setup_entry does to it,
+        including async_on_unload, so use an entry that behaves like one.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            unique_id="aabbccddeeff",
+            data={CONF_ADDRESS: "AA:BB:CC:DD:EE:FF"},
+        )
+        entry.add_to_hass(hass)
         return entry
 
     @pytest.mark.asyncio
-    async def test_setup_entry_success(
-        self, hass: HomeAssistant, mock_entry: MagicMock
+    async def test_setup_entry_seeds_from_advertisement(
+        self,
+        hass: HomeAssistant,
+        mock_entry: MockConfigEntry,
+        mock_ble_device: BLEDevice,
     ):
-        """Test successful setup entry."""
-        mock_ble_device = MagicMock()
-        mock_ble_device.address = "AA:BB:CC:DD:EE:FF"
-        mock_ble_device.name = "Hatch Rest"
+        """Test setup takes its initial state from a cached advertisement."""
+        service_info = MagicMock()
+        service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
 
-        mock_api = MagicMock()
-        mock_api.device = mock_ble_device
-        mock_api.address = mock_ble_device.address
-        mock_api.name = "Hatch Rest"
-        mock_api.brightness = 100
-        mock_api.color = (255, 255, 255)
-        mock_api.power = True
-        mock_api.sound = PyHatchBabyRestSound.none
-        mock_api.volume = 50
-        mock_api.refresh_data = AsyncMock()
-
-        with patch(
-            "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
-            return_value=mock_ble_device,
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=mock_ble_device,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=service_info,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ) as mock_register,
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ) as mock_forward,
         ):
-            with patch(
-                "custom_components.hatch_rest.PyHatchBabyRestAsync",
-                return_value=mock_api,
-            ):
-                with patch(
-                    "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
-                    new_callable=AsyncMock,
-                ) as mock_forward:
-                    result = await async_setup_entry(hass, mock_entry)
+            result = await async_setup_entry(hass, mock_entry)
 
         assert result is True
-        assert mock_entry.runtime_data is not None
         mock_forward.assert_called_once()
+        mock_register.assert_called_once()
+
+        # Seeded with no connection, so no GATT read was needed.
+        coordinator = mock_entry.runtime_data
+        assert coordinator.data["color"] == (253, 209, 45)
+        assert coordinator.data["brightness"] == 127
+        assert coordinator.data["power"] is False
 
     @pytest.mark.asyncio
     async def test_setup_entry_device_not_found(
-        self, hass: HomeAssistant, mock_entry: MagicMock
+        self, hass: HomeAssistant, mock_entry: MockConfigEntry
     ):
         """Test setup entry fails when device not found."""
-        with patch(
-            "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
-            return_value=None,
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+            pytest.raises(ConfigEntryNotReady, match="Could not find"),
         ):
-            with pytest.raises(ConfigEntryNotReady, match="Could not find"):
-                await async_setup_entry(hass, mock_entry)
+            await async_setup_entry(hass, mock_entry)
 
     @pytest.mark.asyncio
     async def test_setup_entry_refresh_fails(
-        self, hass: HomeAssistant, mock_entry: MagicMock
+        self, hass: HomeAssistant, mock_entry: MockConfigEntry
     ):
         """Test setup entry fails when initial refresh fails."""
         mock_ble_device = MagicMock()
@@ -100,16 +115,30 @@ class TestAsyncSetupEntry:
         mock_api.volume = None
         mock_api.refresh_data = AsyncMock(side_effect=Exception("Connection failed"))
 
-        with patch(
-            "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
-            return_value=mock_ble_device,
-        ):
-            with patch(
+        # Without a cached advertisement setup falls back to reading over
+        # GATT, which is allowed to fail and be retried later.
+        mock_entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
+
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=mock_ble_device,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
                 "custom_components.hatch_rest.PyHatchBabyRestAsync",
                 return_value=mock_api,
-            ):
-                with pytest.raises(ConfigEntryNotReady):
-                    await async_setup_entry(hass, mock_entry)
+            ),
+            pytest.raises(ConfigEntryNotReady),
+        ):
+            await async_setup_entry(hass, mock_entry)
 
 
 class TestAsyncUnloadEntry:
