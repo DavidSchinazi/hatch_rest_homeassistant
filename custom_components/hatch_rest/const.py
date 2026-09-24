@@ -55,7 +55,14 @@ ADVERTISEMENT_STALE_SECONDS = 300
 CONNECT_TIMEOUT_SECONDS = 20
 
 # How long to keep a connection open after the last operation.
-IDLE_DISCONNECT_SECONDS = 30
+#
+# The device stops advertising entirely while something is connected to it,
+# so every second the connection is held is a second in which its state is
+# invisible: a command cannot be confirmed, and a button pressed on the
+# device itself is not seen. Keep this just long enough to cover a burst of
+# commands -- adjusting colour, or turning on and setting a sound -- and no
+# longer, since advertisements resume a few seconds after disconnecting.
+IDLE_DISCONNECT_SECONDS = 5
 
 # How long after a command to keep trusting what was written over what the
 # device advertises, so an advertisement still describing the old state does
