@@ -10,6 +10,10 @@ MANUFACTURER_ID = 1076
 # zero, and the device keeps no memory of what it was before.
 DEFAULT_ON_BRIGHTNESS = 255
 
+# What to play when the media player is asked to resume but nothing is known
+# to resume to, such as after a restart. Defined at the bottom of this file,
+# once PyHatchBabyRestSound exists.
+
 COLOR_GRADIENT = (254, 254, 254)  # setting this color turns on Gradient mode
 CHAR_TX = "02240002-5efd-47eb-9c1a-de53f7a2b232"
 CHAR_FEEDBACK = "02260002-5efd-47eb-9c1a-de53f7a2b232"
@@ -91,3 +95,6 @@ class PyHatchBabyRestSound(IntEnum):
     brahms = 11
     twinkle = 13
     rockabye = 14
+
+
+DEFAULT_SOUND = PyHatchBabyRestSound.rain

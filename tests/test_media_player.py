@@ -1,6 +1,6 @@
 """Tests for Hatch Rest media player entity."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.media_player import MediaPlayerDeviceClass
@@ -9,7 +9,7 @@ from homeassistant.components.media_player.const import (
     MediaPlayerState,
 )
 
-from custom_components.hatch_rest.const import PyHatchBabyRestSound
+from custom_components.hatch_rest.const import DEFAULT_SOUND, PyHatchBabyRestSound
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.media_player import HatchBabyRestMediaPlayer
 
@@ -213,13 +213,48 @@ class TestHatchBabyRestMediaPlayer:
     async def test_async_media_play_no_previous_sound(
         self, media_player_entity: HatchBabyRestMediaPlayer
     ):
-        """Test play with no previous sound does not call set_sound."""
+        """Test play still plays when nothing is known to resume to.
+
+        Nothing is remembered after a restart, or when the device was paused
+        somewhere other than Home Assistant. Play used to send nothing at all
+        in that case, so pressing play did nothing.
+        """
         media_player_entity._previous_sound = None
         media_player_entity._hatch_rest_device.power = True
         media_player_entity._hatch_rest_device.set_sound = AsyncMock()
-        media_player_entity.coordinator.async_set_updated_data = AsyncMock()
-        media_player_entity.coordinator.get_current_data = lambda: {"sound": None}
 
         await media_player_entity.async_media_play()
 
-        media_player_entity._hatch_rest_device.set_sound.assert_not_called()
+        media_player_entity._hatch_rest_device.set_sound.assert_called_once_with(
+            DEFAULT_SOUND
+        )
+
+    @pytest.mark.asyncio
+    async def test_media_play_resumes_a_sound_started_on_the_device(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test a sound started on the device itself is remembered.
+
+        Only a pause made through Home Assistant used to be remembered, so a
+        device turned on by its own buttons and later paused here had nothing
+        to resume to.
+        """
+        media_player_entity._previous_sound = None
+        media_player_entity._hatch_rest_device.power = True
+        media_player_entity._hatch_rest_device.set_sound = AsyncMock()
+
+        # Writing entity state needs a hass the bare entity does not have.
+        with patch.object(HatchBabyRestMediaPlayer, "async_write_ha_state"):
+            # The device reports it is playing birds, with no command here.
+            media_player_entity.coordinator.data["sound"] = PyHatchBabyRestSound.bird
+            media_player_entity._handle_coordinator_update()
+
+            # It is then paused, and played again.
+            media_player_entity.coordinator.data["sound"] = PyHatchBabyRestSound.none
+            media_player_entity._handle_coordinator_update()
+
+        await media_player_entity.async_media_play()
+
+        media_player_entity._hatch_rest_device.set_sound.assert_called_once_with(
+            PyHatchBabyRestSound.bird
+        )

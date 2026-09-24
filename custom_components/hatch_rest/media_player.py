@@ -9,10 +9,11 @@ from homeassistant.components.media_player import (
     MediaPlayerState,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import PyHatchBabyRestSound
+from .const import DEFAULT_SOUND
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,7 +37,21 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
         """Initialize the entity."""
         super().__init__(coordinator)
 
-        self._previous_sound: PyHatchBabyRestSound | None = None
+        self._previous_sound: PyHatchBabyRestSound | None = (
+            coordinator.data.get("sound") if coordinator.data else None
+        ) or None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Remember the sound to resume to.
+
+        Tracking every update, rather than only a pause made through Home
+        Assistant, means a sound started on the device itself is remembered
+        too.
+        """
+        if sound := self.coordinator.data.get("sound"):
+            self._previous_sound = sound
+        super()._handle_coordinator_update()
 
     @property
     def device_class(self) -> MediaPlayerDeviceClass | None:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -135,10 +150,13 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
         if not self._hatch_rest_device.power:
             _LOGGER.debug("media_player _hatch_rest_device power not on -- turning on")
             await self._hatch_rest_device.turn_power_on()
-        if previous_sound := self._previous_sound:
-            _LOGGER.debug(
-                "media_player setting source = %d (%s)",
-                previous_sound,
-                PyHatchBabyRestSound(previous_sound).name,
-            )
-            await self._hatch_rest_device.set_sound(previous_sound)
+        # Nothing is known to resume to after a restart, or if the device was
+        # paused somewhere other than here. Play something rather than
+        # silently doing nothing.
+        previous_sound = self._previous_sound or DEFAULT_SOUND
+        _LOGGER.debug(
+            "media_player setting source = %d (%s)",
+            previous_sound,
+            PyHatchBabyRestSound(previous_sound).name,
+        )
+        await self._hatch_rest_device.set_sound(previous_sound)
