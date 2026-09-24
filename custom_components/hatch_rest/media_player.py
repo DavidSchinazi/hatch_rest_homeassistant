@@ -75,7 +75,16 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, RestoreEntity, MediaPlayerEn
             try:
                 self._previous_sound = PyHatchBabyRestSound(sound)
             except ValueError:
-                _LOGGER.debug("media_player ignoring unknown stored sound %s", sound)
+                # Stored data outlives the code that wrote it, so a sound
+                # this version no longer knows about is possible.
+                _LOGGER.debug(
+                    "media_player stored sound %s is not a known sound, "
+                    "falling back to %d (%s)",
+                    sound,
+                    DEFAULT_SOUND,
+                    DEFAULT_SOUND.name,
+                )
+                self._previous_sound = DEFAULT_SOUND
             else:
                 _LOGGER.debug(
                     "media_player restored previous source = %d (%s)",

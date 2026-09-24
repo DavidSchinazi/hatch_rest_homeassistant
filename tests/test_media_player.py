@@ -270,10 +270,14 @@ class TestHatchBabyRestMediaPlayer:
         assert media_player_entity._previous_sound == PyHatchBabyRestSound.ocean
 
     @pytest.mark.asyncio
-    async def test_restart_ignores_an_unknown_stored_sound(
+    async def test_restart_falls_back_on_an_unknown_stored_sound(
         self, media_player_entity: HatchBabyRestMediaPlayer
     ):
-        """Test a stored value that is no longer a valid sound is dropped."""
+        """Test a stored value that is no longer a valid sound uses the default.
+
+        Stored data outlives the code that wrote it, so a sound this version
+        does not know about has to resolve to something playable.
+        """
         media_player_entity._previous_sound = None
         stored = RestoredExtraData({"previous_sound": 99})
 
@@ -291,7 +295,7 @@ class TestHatchBabyRestMediaPlayer:
         ):
             await media_player_entity.async_added_to_hass()
 
-        assert media_player_entity._previous_sound is None
+        assert media_player_entity._previous_sound == DEFAULT_SOUND
 
     def test_extra_restore_state_data(
         self, media_player_entity: HatchBabyRestMediaPlayer
