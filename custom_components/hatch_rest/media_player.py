@@ -1,6 +1,8 @@
 """Hatch Rest media player."""
 
+from dataclasses import dataclass
 import logging
+from typing import Any
 
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
@@ -11,12 +13,24 @@ from homeassistant.components.media_player import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .api import PyHatchBabyRestSound
 from .const import DEFAULT_SOUND
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class HatchBabyRestMediaPlayerExtraData(ExtraStoredData):
+    """The sound to resume to, kept across restarts."""
+
+    previous_sound: int
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dict representation of the extra data."""
+        return {"previous_sound": self.previous_sound}
 
 
 async def async_setup_entry(
@@ -30,7 +44,7 @@ async def async_setup_entry(
     async_add_entities([HatchBabyRestMediaPlayer(coordinator)], update_before_add=False)
 
 
-class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+class HatchBabyRestMediaPlayer(HatchBabyRestEntity, RestoreEntity, MediaPlayerEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Hatch Rest media player entity."""
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
@@ -40,6 +54,34 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
         self._previous_sound: PyHatchBabyRestSound | None = (
             coordinator.data.get("sound") if coordinator.data else None
         ) or None
+
+    @property
+    def extra_restore_state_data(self) -> HatchBabyRestMediaPlayerExtraData | None:
+        """Return the sound to resume to after a restart."""
+        if self._previous_sound is None:
+            return None
+        return HatchBabyRestMediaPlayerExtraData(int(self._previous_sound))
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the sound remembered before the restart."""
+        await super().async_added_to_hass()
+
+        if self._previous_sound is not None:
+            return
+
+        if (extra_data := await self.async_get_last_extra_data()) and (
+            sound := extra_data.as_dict().get("previous_sound")
+        ):
+            try:
+                self._previous_sound = PyHatchBabyRestSound(sound)
+            except ValueError:
+                _LOGGER.debug("media_player ignoring unknown stored sound %s", sound)
+            else:
+                _LOGGER.debug(
+                    "media_player restored previous source = %d (%s)",
+                    self._previous_sound,
+                    self._previous_sound.name,
+                )
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -115,9 +157,10 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, MediaPlayerEntity):  # pyrig
             "media_player volume_level = %s", self.coordinator.data.get("volume")
         )
         volume = self.coordinator.data.get("volume")
-        if volume:
-            return float(volume / 255)
-        return None
+        if volume is None:
+            return None
+        # Zero is a real volume, not an unknown one.
+        return float(volume / 255)
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Set the volume level of the media player."""

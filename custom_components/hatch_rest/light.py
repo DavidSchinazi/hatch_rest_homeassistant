@@ -1,5 +1,6 @@
 """Hatch Rest light."""
 
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -12,11 +13,23 @@ from homeassistant.components.light.const import ColorMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .const import DEFAULT_ON_BRIGHTNESS
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class HatchBabyRestLightExtraData(ExtraStoredData):
+    """The brightness to come back to, kept across restarts."""
+
+    last_on_brightness: int
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dict representation of the extra data."""
+        return {"last_on_brightness": self.last_on_brightness}
 
 
 async def async_setup_entry(
@@ -30,7 +43,7 @@ async def async_setup_entry(
     async_add_entities([HatchBabyRestLight(coordinator)], update_before_add=False)
 
 
-class HatchBabyRestLight(HatchBabyRestEntity, LightEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+class HatchBabyRestLight(HatchBabyRestEntity, RestoreEntity, LightEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Hatch Rest light entity."""
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
@@ -41,6 +54,21 @@ class HatchBabyRestLight(HatchBabyRestEntity, LightEntity):  # pyright: ignore[r
             if coordinator.data
             else DEFAULT_ON_BRIGHTNESS
         )
+
+    @property
+    def extra_restore_state_data(self) -> HatchBabyRestLightExtraData:
+        """Return the brightness to restore after a restart."""
+        return HatchBabyRestLightExtraData(self._last_on_brightness)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the brightness remembered before the restart."""
+        await super().async_added_to_hass()
+
+        if (extra_data := await self.async_get_last_extra_data()) and (
+            brightness := extra_data.as_dict().get("last_on_brightness")
+        ):
+            self._last_on_brightness = brightness
+            _LOGGER.debug("light restored last on brightness = %s", brightness)
 
     @callback
     def _handle_coordinator_update(self) -> None:

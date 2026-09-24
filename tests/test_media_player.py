@@ -8,6 +8,8 @@ from homeassistant.components.media_player.const import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
 )
+from homeassistant.helpers.restore_state import RestoredExtraData
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.hatch_rest.const import DEFAULT_SOUND, PyHatchBabyRestSound
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
@@ -228,6 +230,78 @@ class TestHatchBabyRestMediaPlayer:
         media_player_entity._hatch_rest_device.set_sound.assert_called_once_with(
             DEFAULT_SOUND
         )
+
+    def test_volume_level_zero_is_not_unknown(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test a muted device reports zero rather than an unknown volume."""
+        media_player_entity.coordinator.data["volume"] = 0
+
+        assert media_player_entity.volume_level == 0.0
+
+    def test_volume_level_unknown(self, media_player_entity: HatchBabyRestMediaPlayer):
+        """Test an unknown volume is still unknown."""
+        media_player_entity.coordinator.data["volume"] = None
+
+        assert media_player_entity.volume_level is None
+
+    @pytest.mark.asyncio
+    async def test_previous_sound_survives_a_restart(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test the sound to resume to is restored after a restart."""
+        media_player_entity._previous_sound = None
+        stored = RestoredExtraData({"previous_sound": int(PyHatchBabyRestSound.ocean)})
+
+        with (
+            patch.object(
+                HatchBabyRestMediaPlayer,
+                "async_get_last_extra_data",
+                AsyncMock(return_value=stored),
+            ),
+            # Subscribing to the coordinator is not what is under test, and
+            # leaves its refresh timer behind.
+            patch.object(
+                CoordinatorEntity, "async_added_to_hass", new_callable=AsyncMock
+            ),
+        ):
+            await media_player_entity.async_added_to_hass()
+
+        assert media_player_entity._previous_sound == PyHatchBabyRestSound.ocean
+
+    @pytest.mark.asyncio
+    async def test_restart_ignores_an_unknown_stored_sound(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test a stored value that is no longer a valid sound is dropped."""
+        media_player_entity._previous_sound = None
+        stored = RestoredExtraData({"previous_sound": 99})
+
+        with (
+            patch.object(
+                HatchBabyRestMediaPlayer,
+                "async_get_last_extra_data",
+                AsyncMock(return_value=stored),
+            ),
+            # Subscribing to the coordinator is not what is under test, and
+            # leaves its refresh timer behind.
+            patch.object(
+                CoordinatorEntity, "async_added_to_hass", new_callable=AsyncMock
+            ),
+        ):
+            await media_player_entity.async_added_to_hass()
+
+        assert media_player_entity._previous_sound is None
+
+    def test_extra_restore_state_data(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test what gets written out for the next run."""
+        media_player_entity._previous_sound = PyHatchBabyRestSound.wind
+
+        assert media_player_entity.extra_restore_state_data.as_dict() == {
+            "previous_sound": int(PyHatchBabyRestSound.wind)
+        }
 
     @pytest.mark.asyncio
     async def test_media_play_resumes_a_sound_started_on_the_device(

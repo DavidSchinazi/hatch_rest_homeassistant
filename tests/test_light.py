@@ -1,10 +1,12 @@
 """Tests for Hatch Rest light entity."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 from homeassistant.components.light.const import ColorMode
+from homeassistant.helpers.restore_state import RestoredExtraData
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.hatch_rest.const import DEFAULT_ON_BRIGHTNESS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
@@ -125,6 +127,38 @@ class TestHatchBabyRestLight:
         )
         light_entity._hatch_rest_device.set_brightness.assert_not_called()
         light_entity._hatch_rest_device.set_color.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_brightness_survives_a_restart(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test the brightness to come back to is restored after a restart."""
+        light_entity._last_on_brightness = DEFAULT_ON_BRIGHTNESS
+        stored = RestoredExtraData({"last_on_brightness": 64})
+
+        with (
+            patch.object(
+                HatchBabyRestLight,
+                "async_get_last_extra_data",
+                AsyncMock(return_value=stored),
+            ),
+            # Subscribing to the coordinator is not what is under test, and
+            # leaves its refresh timer behind.
+            patch.object(
+                CoordinatorEntity, "async_added_to_hass", new_callable=AsyncMock
+            ),
+        ):
+            await light_entity.async_added_to_hass()
+
+        assert light_entity._last_on_brightness == 64
+
+    def test_extra_restore_state_data(self, light_entity: HatchBabyRestLight):
+        """Test what gets written out for the next run."""
+        light_entity._last_on_brightness = 64
+
+        assert light_entity.extra_restore_state_data.as_dict() == {
+            "last_on_brightness": 64
+        }
 
     @pytest.mark.asyncio
     async def test_toggle_off_then_on_comes_back(
