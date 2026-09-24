@@ -23,6 +23,8 @@ from custom_components.hatch_rest.const import (
     FEEDBACK_POWER_INDEX,
     FEEDBACK_SOUND_INDEX,
     MARKER_COLOR,
+    MAX_RECONNECT_DELAY_SECONDS,
+    RECONNECT_DELAY_SECONDS,
     PyHatchBabyRestSound,
 )
 
@@ -594,6 +596,22 @@ class TestPyHatchBabyRestAsync:
         assert api._reconnect_timer is not None
 
         api._cancel_reconnect()
+
+    @pytest.mark.asyncio
+    async def test_drop_reconnects_without_backing_off(self, api: PyHatchBabyRestAsync):
+        """Test a dropped link is retried promptly, not after a backoff.
+
+        Holding connections starves the proxy's scanner, so a disconnected
+        device is not covered by advertisements either. Backing off would
+        leave it unseen. Only connects that fail outright escalate.
+        """
+        api._keep_connected = True
+        api._reconnect_delay = MAX_RECONNECT_DELAY_SECONDS
+
+        with patch.object(api, "_schedule_reconnect") as mock_schedule:
+            api._client_disconnected(MagicMock())
+
+        mock_schedule.assert_called_once_with(RECONNECT_DELAY_SECONDS)
 
     @pytest.mark.asyncio
     async def test_no_reconnect_after_stop(self, api: PyHatchBabyRestAsync):

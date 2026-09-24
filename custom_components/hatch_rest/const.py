@@ -55,9 +55,14 @@ ADVERTISEMENT_STALE_SECONDS = 300
 CONNECT_TIMEOUT_SECONDS = 20
 
 # How long to wait before trying a dropped connection again, and the most
-# it will ever wait. Links this weak do drop, and a connect attempt is
-# expensive, so retries back off rather than hammering the radio.
-RECONNECT_DELAY_SECONDS = 10
+# it will ever wait.
+#
+# A disconnected device has no practical state source: holding connections
+# starves the proxy's scanner, so its advertisements mostly do not arrive
+# either. Reconnect quickly rather than leaving it unseen. The escalation in
+# _connect_and_retry still applies to connects that fail outright, so a
+# device that cannot connect at all backs off instead of hammering the radio.
+RECONNECT_DELAY_SECONDS = 2
 MAX_RECONNECT_DELAY_SECONDS = 60
 
 # How long after a command to keep trusting what was written over what the
