@@ -116,6 +116,57 @@ class PyHatchBabyRestAsync:
         self._cancel_idle_disconnect()
         self._client = None
 
+    async def _start_notifications(self, client: BleakClientWithServiceCache) -> None:
+        """Subscribe to state updates over the connection.
+
+        A connected device stops advertising, so without this its state is
+        invisible for as long as the connection is held.
+        """
+        try:
+            if characteristic := client.services.get_characteristic(CHAR_FEEDBACK):
+                _LOGGER.debug(
+                    "%s feedback characteristic properties: %s",
+                    self.address,
+                    characteristic.properties,
+                )
+
+            await client.start_notify(CHAR_FEEDBACK, self._notification_received)
+        except Exception as e:  # noqa: BLE001
+            # Not every device supports this. Advertisements still carry
+            # state once the connection is released.
+            _LOGGER.debug(
+                "%s does not support feedback notifications -- %r", self.address, e
+            )
+        else:
+            _LOGGER.debug("%s subscribed to feedback notifications", self.address)
+
+    def _notification_received(self, characteristic, data: bytearray) -> None:
+        """Handle a state update pushed over the connection."""
+        if self._is_settling():
+            _LOGGER.debug("Ignoring notification while the last command settles")
+            return
+
+        try:
+            state = _parse_state(
+                data,
+                FEEDBACK_COLOR_INDEX,
+                FEEDBACK_SOUND_INDEX,
+                FEEDBACK_POWER_INDEX,
+            )
+        except (IndexError, ValueError) as e:
+            _LOGGER.debug("Ignoring unparseable notification %s -- %r", data.hex(), e)
+            return
+
+        self._apply_state(state, "notification")
+
+    def _is_settling(self) -> bool:
+        """Return whether a command was issued too recently to be second guessed.
+
+        The device can still report the state it had before the command, which
+        would revert what was optimistically applied.
+        """
+        return monotonic() < self._settle_until
+
     def _schedule_idle_disconnect(self) -> None:
         """Disconnect once the device has been idle for a while.
 
@@ -172,6 +223,7 @@ class PyHatchBabyRestAsync:
                     disconnected_callback=self._client_disconnected,
                 )
             _LOGGER.debug("Client connected: %s", client.is_connected)
+            await self._start_notifications(client)
 
         except (
             TimeoutError,
@@ -299,9 +351,7 @@ class PyHatchBabyRestAsync:
         if not manufacturer_data:
             return False
 
-        if monotonic() < self._settle_until:
-            # A command was just written. The device may still be advertising
-            # the state it had beforehand, which would revert the entity.
+        if self._is_settling():
             _LOGGER.debug("Ignoring advertisement while the last command settles")
             return False
 

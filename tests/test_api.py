@@ -17,6 +17,7 @@ from custom_components.hatch_rest.const import (
     ADVERTISEMENT_COLOR_INDEX,
     ADVERTISEMENT_POWER_INDEX,
     ADVERTISEMENT_SOUND_INDEX,
+    CHAR_FEEDBACK,
     CHAR_TX,
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
@@ -136,6 +137,89 @@ class TestPyHatchBabyRestAsync:
         ):
             await api._client_connect()
             assert api._client is None
+
+    @pytest.mark.asyncio
+    async def test_connect_subscribes_to_feedback(self, api: PyHatchBabyRestAsync):
+        """Test connecting subscribes to state pushed over the connection."""
+        mock_client = AsyncMock()
+        mock_client.is_connected = True
+        mock_client.services = MagicMock()
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            await api._client_connect()
+
+        assert mock_client.start_notify.await_args.args[0] == CHAR_FEEDBACK
+
+    @pytest.mark.asyncio
+    async def test_connect_survives_a_device_that_cannot_notify(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a device without notifications is still usable.
+
+        Not every device supports them, and advertisements still carry state
+        once the connection is released, so this must not fail the connect.
+        """
+        mock_client = AsyncMock()
+        mock_client.is_connected = True
+        mock_client.services = MagicMock()
+        mock_client.start_notify = AsyncMock(
+            side_effect=Exception("characteristic does not support notifications")
+        )
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            await api._client_connect()
+
+        assert api._client is mock_client
+
+    def test_notification_updates_state(self, api: PyHatchBabyRestAsync):
+        """Test state pushed over the connection reaches the listener."""
+        listener = MagicMock()
+        api.set_state_changed_callback(listener)
+
+        api._notification_received(MagicMock(), bytearray(FEEDBACK))
+
+        assert api.color == (253, 209, 45)
+        assert api.brightness == 127
+        assert api.sound == PyHatchBabyRestSound.ocean
+        assert api.volume == 84
+        assert api.power is False
+        listener.assert_called_once()
+
+    def test_unparseable_notification_is_ignored(self, api: PyHatchBabyRestAsync):
+        """Test a payload that does not parse leaves state alone."""
+        api._notification_received(MagicMock(), bytearray(b"\x00\x01\x02"))
+
+        assert api.has_state is False
+
+    @pytest.mark.asyncio
+    async def test_notification_does_not_revert_fresh_command(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a notification queued before a write cannot undo it."""
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+        ):
+            api._client = AsyncMock()
+            await api.turn_power_on()
+
+        assert api.power is True
+
+        # FEEDBACK still describes the device as powered off.
+        api._notification_received(MagicMock(), bytearray(FEEDBACK))
+        assert api.power is True
+
+        api._settle_until = 0.0
+        api._notification_received(MagicMock(), bytearray(FEEDBACK))
+        assert api.power is False
 
     @pytest.mark.asyncio
     async def test_client_connect_times_out(self, api: PyHatchBabyRestAsync):
