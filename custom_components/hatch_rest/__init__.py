@@ -42,6 +42,7 @@ async def async_setup_entry(
         hass,
         entry.unique_id,
         hatch_rest_device,
+        config_entry=entry,
     )
     entry.runtime_data = coordinator
 
@@ -57,9 +58,8 @@ async def async_setup_entry(
             BluetoothScanningMode.ACTIVE,
             # An AUTO mode scanner only turns active for a registered address
             # on a schedule, which defaults to 10s every 5 minutes. State only
-            # reaches us in the scan response, so ask for it far more often
-            # than that rather than depending on the scanner being pinned to
-            # active mode.
+            # reaches us in the scan response, so ask for the tightest cadence
+            # allowed. A scanner pinned to active or passive mode ignores this.
             scan_interval=ACTIVE_SCAN_INTERVAL_SECONDS,
             scan_duration=ACTIVE_SCAN_DURATION_SECONDS,
         )

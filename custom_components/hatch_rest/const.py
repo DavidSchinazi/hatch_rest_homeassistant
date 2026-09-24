@@ -31,10 +31,17 @@ ADVERTISEMENT_POWER_INDEX = 20
 
 # How often, and for how long, to ask AUTO mode scanners to scan actively for
 # a configured device. State is carried in the scan response, which only an
-# active scan collects, so the defaults of 10s every 5 minutes are far too
-# sparse.
-ACTIVE_SCAN_INTERVAL_SECONDS = 15
-ACTIVE_SCAN_DURATION_SECONDS = 10
+# active scan collects, and the defaults of 10s every 5 minutes are far too
+# sparse. These are the tightest cadence habluetooth allows: the interval is
+# measured between window starts and must be >= MIN_ACTIVE_SCAN_INTERVAL, and
+# the window is clamped to AUTO_WINDOW_MAX_DURATION.
+#
+# That still leaves 25s of every minute unscanned, so this only limits the
+# damage. Pinning the proxy's scanner to active mode in the ESPHome config
+# entry is what actually keeps state current -- and a pinned scanner ignores
+# these values entirely.
+ACTIVE_SCAN_INTERVAL_SECONDS = 60
+ACTIVE_SCAN_DURATION_SECONDS = 35
 
 # How long to keep a connection open after the last operation.
 IDLE_DISCONNECT_SECONDS = 30

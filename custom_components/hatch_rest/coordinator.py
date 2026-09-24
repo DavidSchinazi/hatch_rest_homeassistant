@@ -7,6 +7,7 @@ from homeassistant.components.bluetooth import (
     BluetoothChange,
     BluetoothServiceInfoBleak,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
@@ -30,11 +31,13 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         hass: HomeAssistant,
         unique_id: str | None,
         hatch_rest_device: PyHatchBabyRestAsync,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name=DOMAIN,
             # State normally arrives from advertisements, which need no
             # connection. This poll is only a backstop for a device that
