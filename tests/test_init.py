@@ -122,7 +122,7 @@ class TestAsyncSetupEntry:
         mock_api.refresh_data = AsyncMock(side_effect=Exception("Connection failed"))
         # Nothing was learned from an advertisement, so setup has to connect.
         mock_api.has_state = False
-        mock_api.seconds_since_advertisement = MagicMock(return_value=float("inf"))
+        mock_api.seconds_since_state_update = MagicMock(return_value=float("inf"))
 
         # Without a cached advertisement setup falls back to reading over
         # GATT, which is allowed to fail and be retried later.

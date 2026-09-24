@@ -7,11 +7,10 @@ https://github.com/kjoconnor/pyhatchbabyrest/blob/master/LICENSE
 """
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 import logging
 from time import monotonic
-
-from collections.abc import Callable
 
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
@@ -34,11 +33,12 @@ from .const import (
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
     FEEDBACK_SOUND_INDEX,
-    IDLE_DISCONNECT_SECONDS,
     MARKER_COLOR,
     MARKER_POWER,
     MARKER_SOUND,
+    MAX_RECONNECT_DELAY_SECONDS,
     POWER_OFF_MASK,
+    RECONNECT_DELAY_SECONDS,
     PyHatchBabyRestSound,
 )
 
@@ -83,10 +83,13 @@ class PyHatchBabyRestAsync:
 
         self._client: BleakClientWithServiceCache | None = None
         self._active_operations: int = 0
-        self._disconnect_timer: asyncio.TimerHandle | None = None
-        self._disconnect_task: asyncio.Task | None = None
         self._settle_until: float = 0.0
-        self._last_advertisement: float | None = None
+        self._commands_in_flight: int = 0
+        self._last_state_update: float | None = None
+        self._keep_connected: bool = False
+        self._reconnect_timer: asyncio.TimerHandle | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_delay: float = RECONNECT_DELAY_SECONDS
         self._state_changed_callback: Callable[[], None] | None = None
 
         # connection synchronization primitizes / state
@@ -112,9 +115,11 @@ class PyHatchBabyRestAsync:
 
     def _client_disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Callback for when the client disconnects."""
-        _LOGGER.debug("API client has successfully disconnected")
-        self._cancel_idle_disconnect()
+        _LOGGER.debug("%s client has disconnected", self.address)
         self._client = None
+        # Notifications stop with the connection, so get it back. State falls
+        # back to advertisements until it returns.
+        self._schedule_reconnect(RECONNECT_DELAY_SECONDS)
 
     async def _start_notifications(self, client: BleakClientWithServiceCache) -> None:
         """Subscribe to state updates over the connection.
@@ -142,8 +147,10 @@ class PyHatchBabyRestAsync:
 
     def _notification_received(self, characteristic, data: bytearray) -> None:
         """Handle a state update pushed over the connection."""
-        if self._is_settling():
-            _LOGGER.debug("Ignoring notification while the last command settles")
+        if self._commands_in_flight:
+            # The write has not been acknowledged yet, so this still
+            # describes the state before it and would revert the entity.
+            _LOGGER.debug("Ignoring notification while a command is in flight")
             return
 
         try:
@@ -157,42 +164,69 @@ class PyHatchBabyRestAsync:
             _LOGGER.debug("Ignoring unparseable notification %s -- %r", data.hex(), e)
             return
 
+        self._last_state_update = monotonic()
         self._apply_state(state, "notification")
 
     def _is_settling(self) -> bool:
         """Return whether a command was issued too recently to be second guessed.
 
-        The device can still report the state it had before the command, which
-        would revert what was optimistically applied.
+        Advertisements lag and arrive unordered, so one can still describe the
+        state before a command and revert what was optimistically applied.
         """
         return monotonic() < self._settle_until
 
-    def _schedule_idle_disconnect(self) -> None:
-        """Disconnect once the device has been idle for a while.
+    async def async_start(self) -> None:
+        """Start keeping a connection to the device.
 
-        Reconnecting costs up to a second, so holding the connection open
-        makes a burst of commands much faster than connecting per command.
+        Connecting is expensive and unpredictable on a weak link, so it is
+        done once here rather than in front of every command, and held.
         """
-        self._cancel_idle_disconnect()
-        self._disconnect_timer = asyncio.get_running_loop().call_later(
-            IDLE_DISCONNECT_SECONDS, self._idle_disconnect
+        _LOGGER.debug("%s starting", self.address)
+        self._keep_connected = True
+        self._reconnect_delay = RECONNECT_DELAY_SECONDS
+        await self._connect_and_retry()
+
+    async def _connect_and_retry(self) -> None:
+        """Connect, arranging another attempt later if it did not work."""
+        if not self._keep_connected:
+            return
+
+        await self._client_connect()
+
+        if self._client is not None:
+            self._reconnect_delay = RECONNECT_DELAY_SECONDS
+            return
+
+        self._schedule_reconnect(self._reconnect_delay)
+        self._reconnect_delay = min(
+            self._reconnect_delay * 3, MAX_RECONNECT_DELAY_SECONDS
         )
 
-    def _cancel_idle_disconnect(self) -> None:
-        """Cancel a pending idle disconnect."""
-        if self._disconnect_timer is not None:
-            self._disconnect_timer.cancel()
-            self._disconnect_timer = None
+    def _schedule_reconnect(self, delay: float) -> None:
+        """Arrange to connect again after a delay."""
+        if not self._keep_connected:
+            return
 
-    def _idle_disconnect(self) -> None:
-        """Handle the idle timer firing."""
-        self._disconnect_timer = None
-        _LOGGER.debug("Idle for %ds, disconnecting", IDLE_DISCONNECT_SECONDS)
-        self._disconnect_task = asyncio.create_task(self._client_disconnect())
+        self._cancel_reconnect()
+        _LOGGER.debug("%s reconnecting in %.0fs", self.address, delay)
+        self._reconnect_timer = asyncio.get_running_loop().call_later(
+            delay, self._reconnect
+        )
+
+    def _cancel_reconnect(self) -> None:
+        """Cancel a pending reconnect."""
+        if self._reconnect_timer is not None:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+
+    def _reconnect(self) -> None:
+        """Handle the reconnect timer firing."""
+        self._reconnect_timer = None
+        self._reconnect_task = asyncio.create_task(self._connect_and_retry())
 
     async def _client_connect(self) -> None:
         """Connect to the device."""
-        self._cancel_idle_disconnect()
+        self._cancel_reconnect()
 
         async with self._connection_cv:
             if self._client and self._client.is_connected:
@@ -272,8 +306,9 @@ class PyHatchBabyRestAsync:
 
     async def async_stop(self) -> None:
         """Disconnect and stop talking to the device."""
-        _LOGGER.debug("Stopping API for %s", self.address)
-        self._cancel_idle_disconnect()
+        _LOGGER.debug("%s stopping", self.address)
+        self._keep_connected = False
+        self._cancel_reconnect()
         self._active_operations = 0
         await self._client_disconnect()
 
@@ -335,11 +370,15 @@ class PyHatchBabyRestAsync:
         """Return whether the device's state is known yet."""
         return self.power is not None
 
-    def seconds_since_advertisement(self) -> float:
-        """Return how long ago an advertisement last carried state."""
-        if self._last_advertisement is None:
+    def seconds_since_state_update(self) -> float:
+        """Return how long ago the device last reported its state.
+
+        A connected device stops advertising and reports over the connection
+        instead, so both count.
+        """
+        if self._last_state_update is None:
             return float("inf")
-        return monotonic() - self._last_advertisement
+        return monotonic() - self._last_state_update
 
     def update_from_advertisement(self, manufacturer_data: bytes | None) -> bool:
         """Update state from a manufacturer specific advertisement payload.
@@ -370,7 +409,7 @@ class PyHatchBabyRestAsync:
             )
             return False
 
-        self._last_advertisement = monotonic()
+        self._last_state_update = monotonic()
         return self._apply_state(state, "advertisement")
 
     async def _send_command(self, command: str):
@@ -383,6 +422,7 @@ class PyHatchBabyRestAsync:
             _LOGGER.debug("Started _send_command at %s", datetime.now().isoformat())
 
         self._set_active_operations(1)
+        self._commands_in_flight += 1
         # Hold off advertisements for the whole command, not just from when it
         # completes: connecting can take seconds, and an advertisement still
         # describing the old state would undo what was optimistically applied.
@@ -405,9 +445,9 @@ class PyHatchBabyRestAsync:
         ) as e:
             _LOGGER.warning("Exception during _send_command -- %r", e)
 
+        self._commands_in_flight -= 1
         self._set_active_operations(-1)
         self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
-        self._schedule_idle_disconnect()
 
         if log_timing:
             _LOGGER.debug(
@@ -449,7 +489,6 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("Exception during refresh_data -- %r", e)
 
         self._set_active_operations(-1)
-        self._schedule_idle_disconnect()
 
         if log_timing:
             _LOGGER.debug(

@@ -96,11 +96,11 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
     ) -> dict[str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None]:
         _LOGGER.debug("Starting coordinator async update")
 
-        age = self.hatch_rest_device.seconds_since_advertisement()
+        age = self.hatch_rest_device.seconds_since_state_update()
         if age < ADVERTISEMENT_STALE_SECONDS:
-            # Advertisements are keeping state current, so there is nothing
-            # worth opening a connection for.
-            _LOGGER.debug("Last advertisement was %.1fs ago, not connecting", age)
+            # Advertisements or notifications are keeping state current, so
+            # there is nothing worth opening a connection for.
+            _LOGGER.debug("State is %.1fs old, not connecting", age)
             return self.get_current_data()
 
         self._last_data = self.data if self.data else {}

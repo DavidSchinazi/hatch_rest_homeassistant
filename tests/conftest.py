@@ -73,7 +73,7 @@ def mock_hatch_api(mock_ble_device: BLEDevice) -> Generator[AsyncMock, None, Non
         # No advertisement heard, so the coordinator falls back to reading
         # over GATT. Tests covering the advertisement path override this.
         mock_api.has_state = False
-        mock_api.seconds_since_advertisement = MagicMock(return_value=float("inf"))
+        mock_api.seconds_since_state_update = MagicMock(return_value=float("inf"))
 
         # Async methods
         mock_api.refresh_data = AsyncMock()

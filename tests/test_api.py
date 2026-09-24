@@ -97,7 +97,7 @@ class TestPyHatchBabyRestAsync:
         """Create API instance, cancelling any pending idle disconnect."""
         api = PyHatchBabyRestAsync(mock_ble_device)
         yield api
-        api._cancel_idle_disconnect()
+        api._cancel_reconnect()
 
     def test_init(self, api: PyHatchBabyRestAsync, mock_ble_device: BLEDevice):
         """Test API initialization."""
@@ -200,10 +200,41 @@ class TestPyHatchBabyRestAsync:
         assert api.has_state is False
 
     @pytest.mark.asyncio
-    async def test_notification_does_not_revert_fresh_command(
+    async def test_notification_in_flight_does_not_revert_a_command(
         self, api: PyHatchBabyRestAsync
     ):
-        """Test a notification queued before a write cannot undo it."""
+        """Test a notification predating the write cannot undo it.
+
+        Until write_gatt_char returns the device has not acknowledged the
+        command, so anything it reports still describes the state before it.
+        """
+        api.power = False
+        seen = []
+
+        async def connect_and_notify():
+            # Arrives while the command is still in flight.
+            api._notification_received(MagicMock(), bytearray(FEEDBACK))
+            seen.append(api.power)
+            api._client = AsyncMock()
+
+        with (
+            patch.object(api, "_client_connect", connect_and_notify),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+        ):
+            await api.turn_power_on()
+
+        assert seen == [True]
+        assert api.power is True
+
+    @pytest.mark.asyncio
+    async def test_notification_after_a_command_is_applied(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the notification confirming a command is not thrown away.
+
+        The device reports about once a second over the connection, and those
+        reports are the only confirmation the command actually landed.
+        """
         with (
             patch.object(api, "_client_connect", new_callable=AsyncMock),
             patch.object(api, "_client_disconnect", new_callable=AsyncMock),
@@ -213,12 +244,9 @@ class TestPyHatchBabyRestAsync:
 
         assert api.power is True
 
-        # FEEDBACK still describes the device as powered off.
+        # FEEDBACK describes the device as powered off.
         api._notification_received(MagicMock(), bytearray(FEEDBACK))
-        assert api.power is True
 
-        api._settle_until = 0.0
-        api._notification_received(MagicMock(), bytearray(FEEDBACK))
         assert api.power is False
 
     @pytest.mark.asyncio
@@ -459,12 +487,12 @@ class TestPyHatchBabyRestAsync:
     def test_has_state_and_advertisement_age(self, api: PyHatchBabyRestAsync):
         """Test state and freshness are only known after a parse."""
         assert api.has_state is False
-        assert api.seconds_since_advertisement() == float("inf")
+        assert api.seconds_since_state_update() == float("inf")
 
         assert api.update_from_advertisement(ADVERTISEMENT) is True
 
         assert api.has_state is True
-        assert api.seconds_since_advertisement() < 1
+        assert api.seconds_since_state_update() < 1
 
     def test_unparseable_advertisement_leaves_state_unknown(
         self, api: PyHatchBabyRestAsync
@@ -473,7 +501,7 @@ class TestPyHatchBabyRestAsync:
         assert api.update_from_advertisement(b"\x00\x01\x02") is False
 
         assert api.has_state is False
-        assert api.seconds_since_advertisement() == float("inf")
+        assert api.seconds_since_state_update() == float("inf")
 
     @pytest.mark.asyncio
     async def test_advertisement_does_not_revert_fresh_command(
@@ -500,10 +528,8 @@ class TestPyHatchBabyRestAsync:
         assert api.power is False
 
     @pytest.mark.asyncio
-    async def test_send_command_schedules_idle_disconnect(
-        self, api: PyHatchBabyRestAsync
-    ):
-        """Test the connection is left open for a later idle disconnect."""
+    async def test_send_command_keeps_the_connection(self, api: PyHatchBabyRestAsync):
+        """Test a command leaves the connection up for the next one."""
         mock_client = AsyncMock()
         api._client = mock_client
 
@@ -512,38 +538,71 @@ class TestPyHatchBabyRestAsync:
             patch.object(api, "_client_disconnect", new_callable=AsyncMock) as mock_dc,
         ):
             await api._send_command("SI01")
-            assert api._disconnect_timer is not None
-            mock_dc.assert_not_called()
 
-            api._cancel_idle_disconnect()
-
-        assert api._disconnect_timer is None
+        mock_dc.assert_not_called()
+        assert api._client is mock_client
 
     @pytest.mark.asyncio
-    async def test_client_connect_cancels_idle_disconnect(
-        self, api: PyHatchBabyRestAsync
-    ):
-        """Test new work cancels a pending idle disconnect."""
-        mock_client = MagicMock()
-        mock_client.is_connected = True
-        api._client = mock_client
-        api._schedule_idle_disconnect()
-
-        await api._client_connect()
-
-        assert api._disconnect_timer is None
-
-    @pytest.mark.asyncio
-    async def test_async_stop_disconnects(self, api: PyHatchBabyRestAsync):
-        """Test async_stop cancels the timer and disconnects."""
+    async def test_start_connects_and_stop_disconnects(self, api: PyHatchBabyRestAsync):
+        """Test the connection is established up front and released on stop."""
         mock_client = AsyncMock()
-        api._client = mock_client
-        api._schedule_idle_disconnect()
+        mock_client.is_connected = True
+        mock_client.services = MagicMock()
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            await api.async_start()
+
+        assert api._client is mock_client
 
         await api.async_stop()
 
-        assert api._disconnect_timer is None
+        assert api._keep_connected is False
         mock_client.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_is_retried(self, api: PyHatchBabyRestAsync):
+        """Test a device that will not connect is tried again later."""
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            side_effect=BleakConnectionError("nope"),
+        ):
+            await api.async_start()
+
+        assert api._client is None
+        assert api._reconnect_timer is not None
+
+        await api.async_stop()
+
+        assert api._reconnect_timer is None
+
+    @pytest.mark.asyncio
+    async def test_dropped_connection_is_reconnected(self, api: PyHatchBabyRestAsync):
+        """Test losing the link schedules a reconnect.
+
+        Notifications stop with the connection, so it has to come back.
+        """
+        api._keep_connected = True
+
+        api._client_disconnected(MagicMock())
+
+        assert api._client is None
+        assert api._reconnect_timer is not None
+
+        api._cancel_reconnect()
+
+    @pytest.mark.asyncio
+    async def test_no_reconnect_after_stop(self, api: PyHatchBabyRestAsync):
+        """Test a disconnect during shutdown does not resurrect the link."""
+        api._keep_connected = False
+
+        api._client_disconnected(MagicMock())
+
+        assert api._reconnect_timer is None
 
     def test_active_operations_tracking(self, api: PyHatchBabyRestAsync):
         """Test active operations counter."""

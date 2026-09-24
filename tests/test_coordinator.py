@@ -9,6 +9,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.hatch_rest.api import PyHatchBabyRestAsync
+
+# A feedback payload captured from a Rest 1st Gen.
+FEEDBACK = bytes.fromhex("54f8001c9643fdd12d7f53055450df6500000000")
 from custom_components.hatch_rest.const import (
     ADVERTISEMENT_STALE_SECONDS,
     DOMAIN,
@@ -43,7 +46,7 @@ class TestHatchBabyRestUpdateCoordinator:
     ):
         """Test a recent advertisement means no connection is opened."""
         device = mock_coordinator.hatch_rest_device
-        device.seconds_since_advertisement = MagicMock(return_value=5.0)
+        device.seconds_since_state_update = MagicMock(return_value=5.0)
 
         data = await mock_coordinator._async_update_data()
 
@@ -56,7 +59,7 @@ class TestHatchBabyRestUpdateCoordinator:
     ):
         """Test a device that stopped advertising is read over GATT."""
         device = mock_coordinator.hatch_rest_device
-        device.seconds_since_advertisement = MagicMock(
+        device.seconds_since_state_update = MagicMock(
             return_value=ADVERTISEMENT_STALE_SECONDS + 1
         )
 
@@ -99,7 +102,7 @@ class TestHatchBabyRestUpdateCoordinator:
             connected.set()
             await asyncio.wait_for(command, timeout=5)
 
-        device._cancel_idle_disconnect()
+        device._cancel_reconnect()
 
     @pytest.mark.asyncio
     async def test_advertisement_during_a_command_does_not_revert_it(
@@ -140,7 +143,27 @@ class TestHatchBabyRestUpdateCoordinator:
             connected.set()
             await asyncio.wait_for(command, timeout=5)
 
-        device._cancel_idle_disconnect()
+        device._cancel_reconnect()
+
+    @pytest.mark.asyncio
+    async def test_notification_keeps_state_fresh(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator, mock_ble_device
+    ):
+        """Test a connected device is not polled for state it already pushes.
+
+        A connected device stops advertising, so notifications have to count
+        as fresh state or the backstop would connect for a read it does not
+        need.
+        """
+        device = PyHatchBabyRestAsync(mock_ble_device)
+        device.refresh_data = AsyncMock()
+        mock_coordinator.hatch_rest_device = device
+
+        device._notification_received(MagicMock(), bytearray(FEEDBACK))
+
+        assert device.seconds_since_state_update() < 1
+        await mock_coordinator._async_update_data()
+        device.refresh_data.assert_not_called()
 
     def test_handle_advertisement_updates_listeners(
         self, hass: HomeAssistant, mock_ble_device
