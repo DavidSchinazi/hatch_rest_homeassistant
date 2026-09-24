@@ -15,6 +15,7 @@ from .api import PyHatchBabyRestAsync
 from .const import (
     ACTIVE_SCAN_DURATION_SECONDS,
     ACTIVE_SCAN_INTERVAL_SECONDS,
+    DOMAIN,
     MANUFACTURER_ID,
 )
 from .coordinator import HatchBabyRestUpdateCoordinator
@@ -87,6 +88,14 @@ async def async_setup_entry(
         await coordinator.async_config_entry_first_refresh()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Hold a connection from now on: it carries state as notifications, and
+    # keeps the cost of connecting -- which can take ten seconds on a weak
+    # link -- out of the way of commands. In the background so setup is not
+    # held up by it.
+    entry.async_create_background_task(
+        hass, hatch_rest_device.async_start(), f"{DOMAIN} connect {address}"
+    )
 
     return True
 

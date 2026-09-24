@@ -72,14 +72,21 @@ class TestAsyncSetupEntry:
             patch.object(
                 PyHatchBabyRestAsync, "refresh_data", new_callable=AsyncMock
             ) as mock_refresh,
+            patch.object(
+                PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock
+            ) as mock_start,
         ):
             result = await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
 
         assert result is True
         mock_forward.assert_called_once()
         mock_register.assert_called_once()
         # The advertisement was enough, so setup never opened a connection.
         mock_refresh.assert_not_called()
+        # But it does start holding one, so commands do not have to wait for
+        # a connect that can take ten seconds on a weak link.
+        mock_start.assert_called_once()
 
         # Seeded with no connection, so no GATT read was needed.
         coordinator = mock_entry.runtime_data
