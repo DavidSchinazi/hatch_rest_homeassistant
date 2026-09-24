@@ -6,6 +6,7 @@ import pytest
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 from homeassistant.components.light.const import ColorMode
 
+from custom_components.hatch_rest.const import DEFAULT_ON_BRIGHTNESS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.light import HatchBabyRestLight
 
@@ -124,6 +125,64 @@ class TestHatchBabyRestLight:
         )
         light_entity._hatch_rest_device.set_brightness.assert_not_called()
         light_entity._hatch_rest_device.set_color.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_then_on_comes_back(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test a plain off/on toggle relights the light.
+
+        Turning off writes a brightness of zero and the device keeps no
+        memory of what it was, so turning on without a brightness has to
+        supply the one it had.
+        """
+        device = light_entity._hatch_rest_device
+        device.set_brightness = AsyncMock()
+        device.set_color_and_brightness = AsyncMock()
+        device.power = True
+
+        # The light was on at 128, per the coordinator fixture.
+        await light_entity.async_turn_off()
+        device.set_brightness.assert_called_once_with(0)
+
+        # The device now reports zero brightness, still powered.
+        light_entity.coordinator.data["brightness"] = 0
+        device.set_brightness.reset_mock()
+
+        await light_entity.async_turn_on()
+
+        device.set_brightness.assert_called_once_with(128)
+
+    @pytest.mark.asyncio
+    async def test_turn_on_while_lit_sends_nothing(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test turning on a light that is already lit is left alone."""
+        device = light_entity._hatch_rest_device
+        device.set_brightness = AsyncMock()
+        device.set_color_and_brightness = AsyncMock()
+        device.turn_power_on = AsyncMock()
+        device.power = True
+
+        await light_entity.async_turn_on()
+
+        device.set_brightness.assert_not_called()
+        device.set_color_and_brightness.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_turn_on_from_dark_uses_a_default(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test a light never seen lit still turns on."""
+        device = light_entity._hatch_rest_device
+        device.set_brightness = AsyncMock()
+        device.power = True
+        light_entity._last_on_brightness = DEFAULT_ON_BRIGHTNESS
+        light_entity.coordinator.data["brightness"] = 0
+
+        await light_entity.async_turn_on()
+
+        device.set_brightness.assert_called_once_with(DEFAULT_ON_BRIGHTNESS)
 
     @pytest.mark.asyncio
     async def test_async_turn_on_powers_on_if_needed(

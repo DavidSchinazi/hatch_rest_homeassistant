@@ -5,6 +5,11 @@ from enum import IntEnum
 DOMAIN = "hatch_rest"
 MANUFACTURER_ID = 1076
 
+# What to restore the light to when it is turned on without a brightness and
+# the device is sitting at zero. Turning the light off writes a brightness of
+# zero, and the device keeps no memory of what it was before.
+DEFAULT_ON_BRIGHTNESS = 255
+
 COLOR_GRADIENT = (254, 254, 254)  # setting this color turns on Gradient mode
 CHAR_TX = "02240002-5efd-47eb-9c1a-de53f7a2b232"
 CHAR_FEEDBACK = "02260002-5efd-47eb-9c1a-de53f7a2b232"

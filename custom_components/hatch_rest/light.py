@@ -10,10 +10,11 @@ from homeassistant.components.light import (
 )
 from homeassistant.components.light.const import ColorMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .coordinator import HatchBabyRestEntity
+from .const import DEFAULT_ON_BRIGHTNESS
+from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +32,22 @@ async def async_setup_entry(
 
 class HatchBabyRestLight(HatchBabyRestEntity, LightEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Hatch Rest light entity."""
+
+    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
+        """Initialize the light."""
+        super().__init__(coordinator)
+        self._last_on_brightness = (
+            coordinator.data.get("brightness") or DEFAULT_ON_BRIGHTNESS
+            if coordinator.data
+            else DEFAULT_ON_BRIGHTNESS
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Remember the brightness to come back to."""
+        if brightness := self.coordinator.data.get("brightness"):
+            self._last_on_brightness = brightness
+        super()._handle_coordinator_update()
 
     @property
     def brightness(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -82,6 +99,14 @@ class HatchBabyRestLight(HatchBabyRestEntity, LightEntity):  # pyright: ignore[r
         if not self._hatch_rest_device.power:
             _LOGGER.debug("light _hatch_rest_device power not on -- turning on")
             await self._hatch_rest_device.turn_power_on()
+
+        if brightness is None and not self.coordinator.data.get("brightness"):
+            # Turning the light off writes a brightness of zero, and the
+            # device does not remember what it was, so turning it back on
+            # without one has to say. Otherwise nothing would be sent at all
+            # and the light would stay dark.
+            brightness = self._last_on_brightness
+            _LOGGER.debug("light restoring brightness = %s", brightness)
 
         # The device takes color and brightness in one command, so setting
         # both is a single round trip.
