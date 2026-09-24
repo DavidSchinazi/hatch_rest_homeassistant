@@ -9,6 +9,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.hatch_rest.api import PyHatchBabyRestAsync
 from custom_components.hatch_rest.const import (
+    ADVERTISEMENT_STALE_SECONDS,
     DOMAIN,
     MANUFACTURER_ID,
     PyHatchBabyRestSound,
@@ -34,6 +35,33 @@ class TestHatchBabyRestUpdateCoordinator:
         assert coordinator.hatch_rest_device == mock_hatch_api
         assert coordinator.name == DOMAIN
         assert coordinator.update_interval == timedelta(seconds=90)
+
+    @pytest.mark.asyncio
+    async def test_update_skips_connecting_while_advertisements_are_fresh(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a recent advertisement means no connection is opened."""
+        device = mock_coordinator.hatch_rest_device
+        device.seconds_since_advertisement = MagicMock(return_value=5.0)
+
+        data = await mock_coordinator._async_update_data()
+
+        device.refresh_data.assert_not_called()
+        assert data == mock_coordinator.get_current_data()
+
+    @pytest.mark.asyncio
+    async def test_update_connects_once_advertisements_go_stale(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a device that stopped advertising is read over GATT."""
+        device = mock_coordinator.hatch_rest_device
+        device.seconds_since_advertisement = MagicMock(
+            return_value=ADVERTISEMENT_STALE_SECONDS + 1
+        )
+
+        await mock_coordinator._async_update_data()
+
+        device.refresh_data.assert_called_once()
 
     def test_handle_advertisement_updates_listeners(
         self, hass: HomeAssistant, mock_ble_device

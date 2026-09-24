@@ -372,6 +372,25 @@ class TestPyHatchBabyRestAsync:
             response=True,
         )
 
+    def test_has_state_and_advertisement_age(self, api: PyHatchBabyRestAsync):
+        """Test state and freshness are only known after a parse."""
+        assert api.has_state is False
+        assert api.seconds_since_advertisement() == float("inf")
+
+        assert api.update_from_advertisement(ADVERTISEMENT) is True
+
+        assert api.has_state is True
+        assert api.seconds_since_advertisement() < 1
+
+    def test_unparseable_advertisement_leaves_state_unknown(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a payload that does not parse does not count as state."""
+        assert api.update_from_advertisement(b"\x00\x01\x02") is False
+
+        assert api.has_state is False
+        assert api.seconds_since_advertisement() == float("inf")
+
     @pytest.mark.asyncio
     async def test_advertisement_does_not_revert_fresh_command(
         self, api: PyHatchBabyRestAsync

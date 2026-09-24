@@ -16,6 +16,7 @@ from custom_components.hatch_rest import (
     async_unload_entry,
     options_update_listener,
 )
+from custom_components.hatch_rest.api import PyHatchBabyRestAsync
 from custom_components.hatch_rest.const import DOMAIN, MANUFACTURER_ID
 
 # An advertisement captured from a Rest 1st Gen.
@@ -68,12 +69,17 @@ class TestAsyncSetupEntry:
                 "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
                 new_callable=AsyncMock,
             ) as mock_forward,
+            patch.object(
+                PyHatchBabyRestAsync, "refresh_data", new_callable=AsyncMock
+            ) as mock_refresh,
         ):
             result = await async_setup_entry(hass, mock_entry)
 
         assert result is True
         mock_forward.assert_called_once()
         mock_register.assert_called_once()
+        # The advertisement was enough, so setup never opened a connection.
+        mock_refresh.assert_not_called()
 
         # Seeded with no connection, so no GATT read was needed.
         coordinator = mock_entry.runtime_data
@@ -114,6 +120,9 @@ class TestAsyncSetupEntry:
         mock_api.sound = None
         mock_api.volume = None
         mock_api.refresh_data = AsyncMock(side_effect=Exception("Connection failed"))
+        # Nothing was learned from an advertisement, so setup has to connect.
+        mock_api.has_state = False
+        mock_api.seconds_since_advertisement = MagicMock(return_value=float("inf"))
 
         # Without a cached advertisement setup falls back to reading over
         # GATT, which is allowed to fail and be retried later.

@@ -18,7 +18,12 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .api import PyHatchBabyRestAsync
-from .const import DOMAIN, MANUFACTURER_ID, PyHatchBabyRestSound
+from .const import (
+    ADVERTISEMENT_STALE_SECONDS,
+    DOMAIN,
+    MANUFACTURER_ID,
+    PyHatchBabyRestSound,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +86,14 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         self,
     ) -> dict[str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None]:
         _LOGGER.debug("Starting coordinator async update")
+
+        age = self.hatch_rest_device.seconds_since_advertisement()
+        if age < ADVERTISEMENT_STALE_SECONDS:
+            # Advertisements are keeping state current, so there is nothing
+            # worth opening a connection for.
+            _LOGGER.debug("Last advertisement was %.1fs ago, not connecting", age)
+            return self.get_current_data()
+
         self._last_data = self.data if self.data else {}
         try:
             await self.hatch_rest_device.refresh_data()

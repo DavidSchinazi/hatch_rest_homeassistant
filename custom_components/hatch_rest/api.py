@@ -84,6 +84,7 @@ class PyHatchBabyRestAsync:
         self._disconnect_timer: asyncio.TimerHandle | None = None
         self._disconnect_task: asyncio.Task | None = None
         self._settle_until: float = 0.0
+        self._last_advertisement: float | None = None
 
         # connection synchronization primitizes / state
         self._connection_cv = asyncio.Condition()
@@ -255,6 +256,17 @@ class PyHatchBabyRestAsync:
         )
         return changed
 
+    @property
+    def has_state(self) -> bool:
+        """Return whether the device's state is known yet."""
+        return self.power is not None
+
+    def seconds_since_advertisement(self) -> float:
+        """Return how long ago an advertisement last carried state."""
+        if self._last_advertisement is None:
+            return float("inf")
+        return monotonic() - self._last_advertisement
+
     def update_from_advertisement(self, manufacturer_data: bytes | None) -> bool:
         """Update state from a manufacturer specific advertisement payload.
 
@@ -286,6 +298,7 @@ class PyHatchBabyRestAsync:
             )
             return False
 
+        self._last_advertisement = monotonic()
         return self._apply_state(state, "advertisement")
 
     async def _send_command(self, command: str):

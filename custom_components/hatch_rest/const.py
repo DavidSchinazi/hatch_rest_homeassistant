@@ -43,6 +43,11 @@ ADVERTISEMENT_POWER_INDEX = 20
 ACTIVE_SCAN_INTERVAL_SECONDS = 60
 ACTIVE_SCAN_DURATION_SECONDS = 35
 
+# How long state from an advertisement stays trusted before the coordinator
+# falls back to reading over GATT. Advertisements normally arrive every few
+# seconds, so this only connects to a device that has really gone quiet.
+ADVERTISEMENT_STALE_SECONDS = 300
+
 # How long to wait for a connection. establish_connection retries internally
 # with no overall deadline, so an unreachable device can otherwise block for
 # minutes -- and block every other caller behind it, since a connection
