@@ -67,11 +67,10 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             if not ble_device:
                 raise ValueError("BLEDevice does not exist")  # noqa: TRY301
+            # The name comes from the advertisement, so discovery needs no
+            # connection. Opening one here would compete for the proxy's
+            # connection slots with the devices already set up.
             hatch_rest_device = PyHatchBabyRestAsync(ble_device)
-            await hatch_rest_device.refresh_data()
-            # Nothing is sent again until the entry is set up, so do not hold
-            # the connection open waiting for the idle timer.
-            await hatch_rest_device.async_stop()
         except Exception as e:  # noqa: BLE001
             _LOGGER.debug("Unexpected error during async_step_bluetooth: %r", e)
             return self.async_abort(reason="unknown")
@@ -139,8 +138,6 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not ble_device:
                     raise ValueError("BLEDevice does not exist")  # noqa: TRY301
                 hatch_rest_device = PyHatchBabyRestAsync(ble_device)
-                await hatch_rest_device.refresh_data()
-                await hatch_rest_device.async_stop()
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("Unexpected error during async_step_user: %r", e)
                 return self.async_abort(reason="unknown")
@@ -153,7 +150,8 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_devices_found")
 
         titles = {
-            address: name for (address, discovery) in self._discovered_devices.items()
+            address: discovery.name
+            for (address, discovery) in self._discovered_devices.items()
         }
         return self.async_show_form(
             step_id="user",

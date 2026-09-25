@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
@@ -10,6 +11,8 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hatch_rest.config_flow import (
+    DiscoveredDevice,
+    HatchBabyRestConfigFlow,
     format_unique_id,
     short_address,
 )
@@ -49,7 +52,6 @@ class TestHatchBabyRestConfigFlow:
         """Test Bluetooth discovery initiates config flow."""
         mock_api = MagicMock()
         mock_api.name = "Hatch Rest"
-        mock_api.refresh_data = AsyncMock()
 
         with patch(
             "custom_components.hatch_rest.config_flow.async_ble_device_from_address",
@@ -75,7 +77,6 @@ class TestHatchBabyRestConfigFlow:
         """Test Bluetooth confirmation creates config entry."""
         mock_api = MagicMock()
         mock_api.name = "Hatch Rest"
-        mock_api.refresh_data = AsyncMock()
 
         with patch(
             "custom_components.hatch_rest.config_flow.async_ble_device_from_address",
@@ -122,17 +123,14 @@ class TestHatchBabyRestConfigFlow:
     async def test_bluetooth_discovery_connection_error(
         self, hass: HomeAssistant, mock_service_info
     ):
-        """Test Bluetooth discovery aborts on connection error."""
-        mock_api = MagicMock()
-        mock_api.refresh_data = AsyncMock(side_effect=Exception("Connection failed"))
-
+        """Test Bluetooth discovery aborts when the device cannot be prepared."""
         with patch(
             "custom_components.hatch_rest.config_flow.async_ble_device_from_address",
             return_value=MagicMock(),
         ):
             with patch(
                 "custom_components.hatch_rest.config_flow.PyHatchBabyRestAsync",
-                return_value=mock_api,
+                side_effect=Exception("Nope"),
             ):
                 result = await hass.config_entries.flow.async_init(
                     DOMAIN,
@@ -165,7 +163,6 @@ class TestHatchBabyRestConfigFlow:
         """Test user step shows form with discovered devices."""
         mock_api = MagicMock()
         mock_api.name = "Hatch Rest"
-        mock_api.refresh_data = AsyncMock()
 
         with patch(
             "custom_components.hatch_rest.config_flow.async_discovered_service_info",
@@ -205,7 +202,6 @@ class TestHatchBabyRestConfigFlow:
         # Mock API + BLE
         mock_api = MagicMock()
         mock_api.name = "Hatch Rest"
-        mock_api.refresh_data = AsyncMock()
 
         with (
             patch(
@@ -247,3 +243,45 @@ class TestHatchBabyRestConfigFlow:
 
         assert result["type"] == FlowResultType.ABORT
         assert result["reason"] == "no_devices_found"
+
+
+class TestUserStepTitles:
+    """Tests for the device picker built by the user step.
+
+    These drive the flow handler directly rather than through
+    hass.config_entries.flow, which needs the bluetooth component and so
+    cannot run on every platform.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_device_is_labelled_with_its_own_name(
+        self, hass: HomeAssistant, mock_service_info
+    ):
+        """Test the picker names each device rather than repeating one."""
+        flow = HatchBabyRestConfigFlow()
+        flow.hass = hass
+        flow._discovered_devices = {
+            "AA:BB:CC:DD:EE:01": DiscoveredDevice(
+                "Nursery", mock_service_info, MagicMock()
+            ),
+            "AA:BB:CC:DD:EE:02": DiscoveredDevice(
+                "Lounge", mock_service_info, MagicMock()
+            ),
+        }
+
+        with (
+            patch(
+                "custom_components.hatch_rest.config_flow.async_discovered_service_info",
+                return_value=[],
+            ),
+            patch.object(
+                HatchBabyRestConfigFlow, "_async_current_ids", return_value=set()
+            ),
+        ):
+            result = await flow.async_step_user()
+
+        titles = result["data_schema"].schema[vol.Required(CONF_ADDRESS)].container
+        assert titles == {
+            "AA:BB:CC:DD:EE:01": "Nursery",
+            "AA:BB:CC:DD:EE:02": "Lounge",
+        }
