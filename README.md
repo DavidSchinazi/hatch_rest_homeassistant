@@ -10,8 +10,11 @@ This repo is a fork of
 [jcgoette/hatch_rest_homeassistant](https://github.com/jcgoette/hatch_rest_homeassistant).
 The main difference is that this version never disconnects BLE on idle, to ensure better
 responsiveness. It was deployed successfully for 4 Hatch devices using two ESP32s running
-[ESPHome Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy/). This fork was
-developed using Claude over a couple of days by a new sleep-deprived father, so no promises.
+[ESPHome Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy/). For that to work,
+you need to go to: Home Assistant > Settings > Devices & services > ESPHome Integration
+and hit the settings gear on each of the proxies to set the Bluetooth scanning mode to
+Active. This fork was developed using Claude over a couple of days by a new sleep-deprived
+father, so no promises.
 
 ## ✨ Features
 
