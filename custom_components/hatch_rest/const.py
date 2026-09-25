@@ -61,7 +61,12 @@ ADVERTISEMENT_STALE_SECONDS = 300
 # with no overall deadline, so an unreachable device can otherwise block for
 # minutes -- and block every other caller behind it, since a connection
 # attempt holds off the ones waiting on it.
-CONNECT_TIMEOUT_SECONDS = 20
+#
+# Connecting either works quickly or not at all: observed successes take
+# between 0.6s and 1.7s, while a stuck attempt runs until it is cut off.
+# Giving up early costs little, since the retry follows a couple of seconds
+# later and repeated failures back off on their own.
+CONNECT_TIMEOUT_SECONDS = 5
 
 # How long to wait before trying a dropped connection again, and the most
 # it will ever wait.
