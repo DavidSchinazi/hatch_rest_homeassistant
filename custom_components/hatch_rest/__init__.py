@@ -60,7 +60,7 @@ async def async_setup_entry(
     )
     if service_info is not None:
         hatch_rest_device.update_from_advertisement(
-            service_info.manufacturer_data.get(MANUFACTURER_ID)
+            service_info.manufacturer_data.get(MANUFACTURER_ID), service_info.time
         )
 
     # Keep state up to date from advertisements, which need no connection.

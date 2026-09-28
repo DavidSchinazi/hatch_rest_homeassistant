@@ -169,7 +169,6 @@ class PyHatchBabyRestAsync:
             _LOGGER.debug("Ignoring unparseable notification %s -- %r", data.hex(), e)
             return
 
-        self._last_state_update = monotonic()
         self._apply_state(state, "notification")
 
     def _is_settling(self) -> bool:
@@ -337,10 +336,18 @@ class PyHatchBabyRestAsync:
             self._reported_unreachable = True
             _LOGGER.warning("%s is unreachable -- %r", self.address, error)
 
-    def _apply_state(self, state: dict, source: str) -> bool:
-        """Store parsed state, returning whether anything changed."""
+    def _apply_state(
+        self, state: dict, source: str, received_at: float | None = None
+    ) -> bool:
+        """Store parsed state, returning whether anything changed.
+
+        Only reports from the device itself land here -- commands publish
+        through _notify_state_changed instead -- so this is where the device
+        was last heard from.
+        """
         # Any state at all means the device is answering again.
         self._reported_unreachable = False
+        self._last_state_update = monotonic() if received_at is None else received_at
 
         changed = (
             self.color,
@@ -408,11 +415,19 @@ class PyHatchBabyRestAsync:
             return float("inf")
         return monotonic() - self._last_state_update
 
-    def update_from_advertisement(self, manufacturer_data: bytes | None) -> bool:
+    def update_from_advertisement(
+        self, manufacturer_data: bytes | None, received_at: float | None = None
+    ) -> bool:
         """Update state from a manufacturer specific advertisement payload.
 
         The advertisement carries the same state as the feedback
         characteristic, so no connection is needed to stay up to date.
+
+        received_at is when the advertisement was actually picked up, on the
+        monotonic clock. Home Assistant hands out the last one it saw, which
+        for a device that has been switched off for days is exactly that old,
+        and taking it for current would make the device look alive.
+
         Returns whether anything changed.
         """
         if not manufacturer_data:
@@ -437,8 +452,7 @@ class PyHatchBabyRestAsync:
             )
             return False
 
-        self._last_state_update = monotonic()
-        return self._apply_state(state, "advertisement")
+        return self._apply_state(state, "advertisement", received_at)
 
     async def _send_command(self, command: str):
         """Send a command do the device.

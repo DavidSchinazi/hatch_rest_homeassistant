@@ -74,7 +74,7 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
 
         # A change publishes itself through the state changed callback.
         self.hatch_rest_device.update_from_advertisement(
-            service_info.manufacturer_data.get(MANUFACTURER_ID)
+            service_info.manufacturer_data.get(MANUFACTURER_ID), service_info.time
         )
 
     def get_current_data(
@@ -130,13 +130,19 @@ class HatchBabyRestEntity(CoordinatorEntity[HatchBabyRestUpdateCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Return whether the device's state is known.
+        """Return whether the device has been heard from recently.
 
-        The coordinator is seeded at setup even when nothing has been heard
-        from the device, so that the entities exist. Until some state turns
-        up there is nothing to report, and unavailable says so.
+        The coordinator is seeded at setup with the last advertisement Home
+        Assistant holds, which may have been picked up days ago, so the test
+        is whether that state is current rather than whether it exists. A
+        device that has gone quiet is reported unavailable straight away
+        instead of waiting for a poll to fail.
         """
-        return super().available and self._hatch_rest_device.has_state
+        return (
+            super().available
+            and self._hatch_rest_device.seconds_since_state_update()
+            < ADVERTISEMENT_STALE_SECONDS
+        )
 
     @property
     def device_info(self) -> DeviceInfo:  # pyright: ignore[reportIncompatibleVariableOverride]

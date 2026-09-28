@@ -1,5 +1,6 @@
 """Tests for Hatch Rest integration setup."""
 
+from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -51,6 +52,7 @@ class TestAsyncSetupEntry:
         """Test setup takes its initial state from a cached advertisement."""
         service_info = MagicMock()
         service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+        service_info.time = monotonic()
 
         with (
             patch(
@@ -93,6 +95,53 @@ class TestAsyncSetupEntry:
         assert coordinator.data["color"] == (253, 209, 45)
         assert coordinator.data["brightness"] == 127
         assert coordinator.data["power"] is False
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_stale_advertisement_loads_unavailable(
+        self,
+        hass: HomeAssistant,
+        mock_entry: MockConfigEntry,
+        mock_ble_device: BLEDevice,
+    ):
+        """Test a long-stale cached advertisement does not look like a live device.
+
+        Home Assistant hands out the last advertisement it saw regardless of
+        age, so a Hatch switched off days ago still seeds state at setup.
+        Taking that as current left the entities available, reporting the
+        state the device had when it was unplugged, until a poll eventually
+        failed.
+        """
+        service_info = MagicMock()
+        service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+        service_info.time = monotonic() - (2 * 24 * 60 * 60)
+
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=mock_ble_device,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=service_info,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ),
+            patch.object(PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock),
+        ):
+            result = await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+
+        assert result is True
+        coordinator = mock_entry.runtime_data
+        # The state is still worth having, it is just not current.
+        assert coordinator.hatch_rest_device.has_state is True
+        assert HatchBabyRestEntity(coordinator).available is False
 
     @pytest.mark.asyncio
     async def test_setup_entry_unseen_device_loads_unavailable(
@@ -218,6 +267,7 @@ class TestAsyncSetupEntry:
         service_info = MagicMock()
         service_info.device = mock_ble_device
         service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+        service_info.time = monotonic()
         coordinator.async_handle_advertisement(service_info, None)
 
         assert coordinator.hatch_rest_device.device is mock_ble_device

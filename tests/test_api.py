@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Generator
+from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -585,6 +586,41 @@ class TestPyHatchBabyRestAsync:
 
         assert api.has_state is True
         assert api.seconds_since_state_update() < 1
+
+    def test_advertisement_age_comes_from_when_it_arrived(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a replayed advertisement is aged from when it was picked up.
+
+        Home Assistant keeps handing out the last advertisement it saw, so
+        seeding from one at startup must not reset the clock or a device
+        switched off days ago looks like it just reported in.
+        """
+        two_days_ago = monotonic() - (2 * 24 * 60 * 60)
+
+        assert api.update_from_advertisement(ADVERTISEMENT, two_days_ago) is True
+
+        assert api.has_state is True
+        assert api.seconds_since_state_update() > 24 * 60 * 60
+
+    @pytest.mark.asyncio
+    async def test_command_does_not_make_a_silent_device_look_fresh(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test commanding a device is not evidence it is still there.
+
+        Commands apply optimistically so entities follow them at once, but
+        that is this end talking. Letting it count as a report would keep an
+        unplugged Hatch looking alive for as long as it was being poked.
+        """
+        api.update_from_advertisement(ADVERTISEMENT, monotonic() - 600)
+        before = api.seconds_since_state_update()
+
+        with patch.object(api, "_send_command", new_callable=AsyncMock):
+            await api.turn_power_on()
+
+        assert api.power is True
+        assert api.seconds_since_state_update() >= before
 
     def test_unparseable_advertisement_leaves_state_unknown(
         self, api: PyHatchBabyRestAsync
