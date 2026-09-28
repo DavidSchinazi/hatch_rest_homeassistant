@@ -2,6 +2,7 @@
 
 import logging
 
+from bleak.backends.device import BLEDevice
 from homeassistant import config_entries, core
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
@@ -9,7 +10,6 @@ from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
 )
 from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import PyHatchBabyRestAsync
 from .const import (
@@ -35,9 +35,13 @@ async def async_setup_entry(
     address = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper())
     if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Hatch Rest device with address {address}"
-        )
+        # Nothing has been heard from this address, which is what an unplugged
+        # Hatch looks like. Set up against a placeholder rather than holding
+        # the entry in retry: the entities are then present but unavailable,
+        # which describes the device better than an entry that never loads.
+        # The real BLEDevice arrives with the first advertisement.
+        _LOGGER.debug("%s has not been seen yet, setting up unavailable", address)
+        ble_device = BLEDevice(address.upper(), entry.title, {})
     hatch_rest_device = PyHatchBabyRestAsync(ble_device)
     coordinator = HatchBabyRestUpdateCoordinator(
         hass,
@@ -79,13 +83,12 @@ async def async_setup_entry(
     )
     entry.async_on_unload(hatch_rest_device.async_stop)
 
+    # Publish whatever is known, which may be nothing at all. Entities report
+    # unavailable until state arrives, so setup never waits on a connection to
+    # a device that might be switched off.
     if hatch_rest_device.has_state:
         _LOGGER.debug("Seeded initial state from advertisement for %s", address)
-        coordinator.async_set_updated_data(coordinator.get_current_data())
-    else:
-        # No usable advertisement, so read over GATT instead. This raises
-        # ConfigEntryNotReady on failure, so setup is retried later.
-        await coordinator.async_config_entry_first_refresh()
+    coordinator.async_set_updated_data(coordinator.get_current_data())
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

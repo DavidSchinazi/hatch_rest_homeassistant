@@ -67,6 +67,11 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
     ) -> None:
         """Update state from a Bluetooth advertisement."""
+        # Setup may have had to invent a BLEDevice because the Hatch had not
+        # been heard from, and a real one goes stale in any case, so take the
+        # one that came with this advertisement.
+        self.hatch_rest_device.device = service_info.device
+
         # A change publishes itself through the state changed callback.
         self.hatch_rest_device.update_from_advertisement(
             service_info.manufacturer_data.get(MANUFACTURER_ID)
@@ -122,6 +127,16 @@ class HatchBabyRestEntity(CoordinatorEntity[HatchBabyRestUpdateCoordinator]):
         super().__init__(coordinator)
         self._hatch_rest_device = coordinator.hatch_rest_device
         self._attr_unique_id = coordinator.unique_id
+
+    @property
+    def available(self) -> bool:
+        """Return whether the device's state is known.
+
+        The coordinator is seeded at setup even when nothing has been heard
+        from the device, so that the entities exist. Until some state turns
+        up there is nothing to report, and unavailable says so.
+        """
+        return super().available and self._hatch_rest_device.has_state
 
     @property
     def device_info(self) -> DeviceInfo:  # pyright: ignore[reportIncompatibleVariableOverride]

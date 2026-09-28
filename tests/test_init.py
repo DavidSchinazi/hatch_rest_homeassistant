@@ -4,10 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from bleak.backends.device import BLEDevice
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hatch_rest import (
@@ -18,6 +17,7 @@ from custom_components.hatch_rest import (
 )
 from custom_components.hatch_rest.api import PyHatchBabyRestAsync
 from custom_components.hatch_rest.const import DOMAIN, MANUFACTURER_ID
+from custom_components.hatch_rest.coordinator import HatchBabyRestEntity
 
 # An advertisement captured from a Rest 1st Gen.
 ADVERTISEMENT = bytes.fromhex("5254f8001ccc43fdd12d7f53055445000000000050df6500")
@@ -95,50 +95,20 @@ class TestAsyncSetupEntry:
         assert coordinator.data["power"] is False
 
     @pytest.mark.asyncio
-    async def test_setup_entry_device_not_found(
+    async def test_setup_entry_unseen_device_loads_unavailable(
         self, hass: HomeAssistant, mock_entry: MockConfigEntry
     ):
-        """Test setup entry fails when device not found."""
+        """Test a device that has not been heard from still sets up.
+
+        An unplugged Hatch is indistinguishable from one that has simply not
+        advertised yet. Holding the config entry in retry would delay startup
+        and leave no entities at all, so setup proceeds and the entities
+        report unavailable instead.
+        """
         with (
             patch(
                 "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
                 return_value=None,
-            ),
-            pytest.raises(ConfigEntryNotReady, match="Could not find"),
-        ):
-            await async_setup_entry(hass, mock_entry)
-
-    @pytest.mark.asyncio
-    async def test_setup_entry_refresh_fails(
-        self, hass: HomeAssistant, mock_entry: MockConfigEntry
-    ):
-        """Test setup entry fails when initial refresh fails."""
-        mock_ble_device = MagicMock()
-        mock_ble_device.address = "AA:BB:CC:DD:EE:FF"
-        mock_ble_device.name = "Hatch Rest"
-
-        mock_api = MagicMock()
-        mock_api.device = mock_ble_device
-        mock_api.address = mock_ble_device.address
-        mock_api.name = "Hatch Rest"
-        mock_api.brightness = None
-        mock_api.color = None
-        mock_api.power = None
-        mock_api.sound = None
-        mock_api.volume = None
-        mock_api.refresh_data = AsyncMock(side_effect=Exception("Connection failed"))
-        # Nothing was learned from an advertisement, so setup has to connect.
-        mock_api.has_state = False
-        mock_api.seconds_since_state_update = MagicMock(return_value=float("inf"))
-
-        # Without a cached advertisement setup falls back to reading over
-        # GATT, which is allowed to fail and be retried later.
-        mock_entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
-
-        with (
-            patch(
-                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
-                return_value=mock_ble_device,
             ),
             patch(
                 "custom_components.hatch_rest.bluetooth.async_last_service_info",
@@ -149,12 +119,112 @@ class TestAsyncSetupEntry:
                 return_value=lambda: None,
             ),
             patch(
-                "custom_components.hatch_rest.PyHatchBabyRestAsync",
-                return_value=mock_api,
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ) as mock_forward,
+            patch.object(
+                PyHatchBabyRestAsync, "refresh_data", new_callable=AsyncMock
+            ) as mock_refresh,
+            patch.object(PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock),
+        ):
+            result = await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+
+        assert result is True
+        mock_forward.assert_called_once()
+        # Setup must not wait on a connection to a device that may be off.
+        mock_refresh.assert_not_called()
+
+        coordinator = mock_entry.runtime_data
+        # The entities exist and have data to read, but nothing is known.
+        assert coordinator.data["power"] is None
+        assert coordinator.hatch_rest_device.has_state is False
+
+        entity = HatchBabyRestEntity(coordinator)
+        assert entity.available is False
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_unseen_device_keeps_its_name(
+        self, hass: HomeAssistant, mock_entry: MockConfigEntry
+    ):
+        """Test the placeholder device is named after the config entry.
+
+        Otherwise a Hatch that was unplugged across a restart would come back
+        nameless in the device registry.
+        """
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=None,
             ),
-            pytest.raises(ConfigEntryNotReady),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ),
+            patch.object(PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock),
         ):
             await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+
+        coordinator = mock_entry.runtime_data
+        assert coordinator.hatch_rest_device.address == "AA:BB:CC:DD:EE:FF"
+        assert coordinator.hatch_rest_device.name == mock_entry.title
+
+    @pytest.mark.asyncio
+    async def test_advertisement_replaces_placeholder_device(
+        self,
+        hass: HomeAssistant,
+        mock_entry: MockConfigEntry,
+        mock_ble_device: BLEDevice,
+    ):
+        """Test the first advertisement supplies a connectable BLEDevice.
+
+        The placeholder setup invents cannot be connected through, so it has
+        to be replaced once the device turns up.
+        """
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ),
+            patch.object(PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock),
+        ):
+            await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+
+        coordinator = mock_entry.runtime_data
+        placeholder = coordinator.hatch_rest_device.device
+
+        service_info = MagicMock()
+        service_info.device = mock_ble_device
+        service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+        coordinator.async_handle_advertisement(service_info, None)
+
+        assert coordinator.hatch_rest_device.device is mock_ble_device
+        assert coordinator.hatch_rest_device.device is not placeholder
+        # And with state in hand the entities can report themselves usable.
+        assert coordinator.hatch_rest_device.has_state is True
+        assert HatchBabyRestEntity(coordinator).available is True
 
 
 class TestAsyncUnloadEntry:
