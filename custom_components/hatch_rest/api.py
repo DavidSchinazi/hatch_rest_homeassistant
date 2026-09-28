@@ -45,6 +45,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class HatchRestConnectionError(Exception):
+    """Raised when the device could not be reached."""
+
+
 def _assert_marker(data: bytes, index: int, marker: int):
     if data[index] != marker:
         raise ValueError(f"data[{index}] {data[index]:#04x} != {marker:#04x}")
@@ -90,6 +94,7 @@ class PyHatchBabyRestAsync:
         self._reconnect_timer: asyncio.TimerHandle | None = None
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_delay: float = RECONNECT_DELAY_SECONDS
+        self._reported_unreachable: bool = False
         self._state_changed_callback: Callable[[], None] | None = None
 
         # connection synchronization primitizes / state
@@ -267,7 +272,7 @@ class PyHatchBabyRestAsync:
             BleakConnectionError,
             Exception,  # noqa: BLE001
         ) as e:
-            _LOGGER.warning("Exception during _client_connect -- %r", e)
+            self._log_unreachable(e)
             client = None
 
         async with self._connection_cv:
@@ -312,8 +317,24 @@ class PyHatchBabyRestAsync:
         self._active_operations = 0
         await self._client_disconnect()
 
+    def _log_unreachable(self, error: Exception) -> None:
+        """Report a failed refresh, loudly once and quietly after that.
+
+        A Hatch that is simply switched off stays unreachable for as long as
+        it is unplugged, so warning on every poll would bury the log in
+        repetitions of something already said.
+        """
+        if self._reported_unreachable:
+            _LOGGER.debug("%s still unreachable -- %r", self.address, error)
+        else:
+            self._reported_unreachable = True
+            _LOGGER.warning("%s is unreachable -- %r", self.address, error)
+
     def _apply_state(self, state: dict, source: str) -> bool:
         """Store parsed state, returning whether anything changed."""
+        # Any state at all means the device is answering again.
+        self._reported_unreachable = False
+
         changed = (
             self.color,
             self.brightness,
@@ -457,45 +478,56 @@ class PyHatchBabyRestAsync:
             )
 
     async def refresh_data(self):
-        """Refresh data from Hatch Rest device."""
+        """Refresh data from Hatch Rest device.
+
+        Raises HatchRestConnectionError if the device could not be read, so
+        that the caller can tell an unreachable device apart from one whose
+        state simply has not changed.
+        """
         if log_timing := _LOGGER.isEnabledFor(logging.DEBUG):
             start = monotonic()
             _LOGGER.debug("Started refresh_data at %s", datetime.now().isoformat())
 
         self._set_active_operations(1)
-        await self._client_connect()
 
         try:
-            raw_char_read = await self._client.read_gatt_char(CHAR_FEEDBACK)  # pyright: ignore[reportOptionalMemberAccess]
-            _LOGGER.debug("Raw char read from refresh_data: %s", raw_char_read)
+            await self._client_connect()
 
-            self._apply_state(
-                _parse_state(
-                    raw_char_read,
-                    FEEDBACK_COLOR_INDEX,
-                    FEEDBACK_SOUND_INDEX,
-                    FEEDBACK_POWER_INDEX,
-                ),
-                "refresh_data",
-            )
+            if self._client is None:
+                raise HatchRestConnectionError(f"{self.address} could not be connected")
 
-        except (
-            BleakNotFoundError,
-            BleakOutOfConnectionSlotsError,
-            BleakAbortedError,
-            BleakConnectionError,
-            Exception,  # noqa: BLE001
-        ) as e:
-            _LOGGER.warning("Exception during refresh_data -- %r", e)
+            try:
+                raw_char_read = await self._client.read_gatt_char(CHAR_FEEDBACK)
+                _LOGGER.debug("Raw char read from refresh_data: %s", raw_char_read)
 
-        self._set_active_operations(-1)
+                self._apply_state(
+                    _parse_state(
+                        raw_char_read,
+                        FEEDBACK_COLOR_INDEX,
+                        FEEDBACK_SOUND_INDEX,
+                        FEEDBACK_POWER_INDEX,
+                    ),
+                    "refresh_data",
+                )
 
-        if log_timing:
-            _LOGGER.debug(
-                "Finished refresh_data at %s (total of %.3f seconds)",
-                datetime.now().isoformat(),
-                monotonic() - start,  # pyright: ignore[reportPossiblyUnboundVariable]
-            )
+            except Exception as e:
+                raise HatchRestConnectionError(
+                    f"{self.address} could not be read -- {e!r}"
+                ) from e
+
+        except HatchRestConnectionError as e:
+            self._log_unreachable(e)
+            raise
+
+        finally:
+            self._set_active_operations(-1)
+
+            if log_timing:
+                _LOGGER.debug(
+                    "Finished refresh_data at %s (total of %.3f seconds)",
+                    datetime.now().isoformat(),
+                    monotonic() - start,  # pyright: ignore[reportPossiblyUnboundVariable]
+                )
 
     async def turn_power_on(self):
         """Power on the Hatch Rest device."""

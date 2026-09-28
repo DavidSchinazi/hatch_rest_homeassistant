@@ -243,10 +243,15 @@ class TestHatchBabyRestUpdateCoordinator:
         assert data["power"] is True
 
     @pytest.mark.asyncio
-    async def test_async_update_data_failure_with_cache(
+    async def test_async_update_data_failure_ignores_cache(
         self, hass: HomeAssistant, mock_hatch_api: AsyncMock
     ):
-        """Test update failure returns cached data when available."""
+        """Test update failure raises even though cached data exists.
+
+        Cached data is only reached once state is already stale, so serving
+        it would keep a device that has been unplugged for days looking like
+        it still holds the state it had when it was switched off.
+        """
         coordinator = HatchBabyRestUpdateCoordinator(
             hass,
             unique_id="aabbccddeeff",
@@ -264,11 +269,8 @@ class TestHatchBabyRestUpdateCoordinator:
 
         mock_hatch_api.refresh_data.side_effect = Exception("Connection failed")
 
-        data = await coordinator._async_update_data()
-
-        # Should return cached data
-        assert data["brightness"] == 50
-        assert data["power"] is False
+        with pytest.raises(UpdateFailed, match="AA:BB:CC:DD:EE:FF"):
+            await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_failure_without_cache(

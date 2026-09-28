@@ -9,6 +9,7 @@ from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakConnectionError
 
 from custom_components.hatch_rest.api import (
+    HatchRestConnectionError,
     PyHatchBabyRestAsync,
     _assert_marker,
     _parse_state,
@@ -359,6 +360,95 @@ class TestPyHatchBabyRestAsync:
         assert api.sound == PyHatchBabyRestSound.ocean
         assert api.volume == 100
         assert api.power is True
+
+    @pytest.mark.asyncio
+    async def test_refresh_data_raises_when_connect_fails(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test refresh_data reports an unreachable device rather than hiding it."""
+        api._client = None
+
+        async def fail_to_connect():
+            api._client = None
+
+        with (
+            patch.object(api, "_client_connect", side_effect=fail_to_connect),
+            pytest.raises(HatchRestConnectionError, match="could not be connected"),
+        ):
+            await api.refresh_data()
+
+        assert api._active_operations == 0
+
+    @pytest.mark.asyncio
+    async def test_refresh_data_raises_when_read_fails(self, api: PyHatchBabyRestAsync):
+        """Test a failed characteristic read surfaces as a connection error."""
+        mock_client = AsyncMock()
+        mock_client.read_gatt_char = AsyncMock(side_effect=BleakConnectionError("boom"))
+        api._client = mock_client
+
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            pytest.raises(HatchRestConnectionError, match="could not be read"),
+        ):
+            await api.refresh_data()
+
+        assert api._active_operations == 0
+
+    @pytest.mark.asyncio
+    async def test_refresh_data_warns_once_while_unreachable(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a device that stays unplugged is only warned about once."""
+
+        async def fail_to_connect():
+            api._client = None
+
+        with patch.object(api, "_client_connect", side_effect=fail_to_connect):
+            for _ in range(3):
+                with pytest.raises(HatchRestConnectionError):
+                    await api.refresh_data()
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "is unreachable" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_data_warns_again_after_recovery(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a device that comes back and leaves again warns a second time."""
+
+        async def fail_to_connect():
+            api._client = None
+
+        with patch.object(api, "_client_connect", side_effect=fail_to_connect):
+            with pytest.raises(HatchRestConnectionError):
+                await api.refresh_data()
+
+            # A notification or advertisement arriving means it is back.
+            api._apply_state(
+                {
+                    "color": (1, 2, 3),
+                    "brightness": 4,
+                    "sound": PyHatchBabyRestSound.rain,
+                    "volume": 5,
+                    "power": True,
+                },
+                "notification",
+            )
+
+            with pytest.raises(HatchRestConnectionError):
+                await api.refresh_data()
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "is unreachable" in r.getMessage()
+        ]
+        assert len(warnings) == 2
 
     @pytest.mark.asyncio
     async def test_turn_power_on(self, api: PyHatchBabyRestAsync):

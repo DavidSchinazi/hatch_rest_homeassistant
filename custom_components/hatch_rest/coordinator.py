@@ -56,9 +56,6 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         # entities can follow a command immediately instead of waiting for a
         # connection that may take seconds.
         hatch_rest_device.set_state_changed_callback(self._async_state_changed)
-        self._last_data: dict[
-            str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None
-        ] = {}
 
     @callback
     def _async_state_changed(self) -> None:
@@ -103,20 +100,18 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("State is %.1fs old, not connecting", age)
             return self.get_current_data()
 
-        self._last_data = self.data if self.data else {}
         try:
             await self.hatch_rest_device.refresh_data()
         except Exception as e:
-            _LOGGER.warning(
-                "_async_update_data failed to refresh Hatch Rest data: %r", e
-            )
-            # Don’t raise; use previous successful data if available
-            if self._last_data:
-                _LOGGER.debug("Using cached data due to _async_update_data failure")
-                return self._last_data
-            raise UpdateFailed(f"Device update failed: {e}") from e
-        else:
-            return self.get_current_data()
+            # State was already stale and the device did not answer, so the
+            # cached values could be arbitrarily old -- a Hatch that has been
+            # unplugged for days would otherwise keep reporting the state it
+            # had when it was switched off. Let the entities go unavailable.
+            raise UpdateFailed(
+                f"Device update failed for {self.hatch_rest_device.address}: {e}"
+            ) from e
+
+        return self.get_current_data()
 
 
 class HatchBabyRestEntity(CoordinatorEntity[HatchBabyRestUpdateCoordinator]):
