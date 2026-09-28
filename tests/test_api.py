@@ -704,6 +704,67 @@ class TestPyHatchBabyRestAsync:
         mock_schedule.assert_called_once_with(RECONNECT_DELAY_SECONDS)
 
     @pytest.mark.asyncio
+    async def test_failed_poll_does_not_retire_pending_reconnect(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a failing poll leaves the scheduled reconnect in place.
+
+        Only _connect_and_retry schedules reconnects, so a poll that quietly
+        cancelled the pending one and then failed itself would end
+        reconnection permanently -- observed in the wild as a device that
+        stayed on backstop polling until Home Assistant was restarted.
+        """
+        api._keep_connected = True
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            side_effect=BleakConnectionError("nope"),
+        ):
+            await api.async_start()
+            assert api._reconnect_timer is not None
+            pending = api._reconnect_timer
+
+            with pytest.raises(HatchRestConnectionError):
+                await api.refresh_data()
+
+        assert api._reconnect_timer is pending
+        assert not pending.cancelled()
+
+        await api.async_stop()
+
+    @pytest.mark.asyncio
+    async def test_successful_connect_retires_pending_reconnect(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a connection that succeeds cancels the retry it made moot."""
+        api._keep_connected = True
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            side_effect=BleakConnectionError("nope"),
+        ):
+            await api.async_start()
+
+        assert api._reconnect_timer is not None
+
+        mock_client = AsyncMock()
+        mock_client.is_connected = True
+        with (
+            patch(
+                "custom_components.hatch_rest.api.establish_connection",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch.object(api, "_start_notifications", new_callable=AsyncMock),
+        ):
+            await api._client_connect()
+
+        assert api._client is mock_client
+        assert api._reconnect_timer is None
+
+    @pytest.mark.asyncio
     async def test_no_reconnect_after_stop(self, api: PyHatchBabyRestAsync):
         """Test a disconnect during shutdown does not resurrect the link."""
         api._keep_connected = False

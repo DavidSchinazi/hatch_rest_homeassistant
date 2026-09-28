@@ -230,9 +230,14 @@ class PyHatchBabyRestAsync:
         self._reconnect_task = asyncio.create_task(self._connect_and_retry())
 
     async def _client_connect(self) -> None:
-        """Connect to the device."""
-        self._cancel_reconnect()
+        """Connect to the device.
 
+        A pending reconnect is only cancelled once there is a connection to
+        show for it. Cancelling on the way in would let a command or a
+        coordinator poll retire the retry that _connect_and_retry scheduled,
+        and neither of them schedules a replacement, so a single failure at
+        the wrong moment would end reconnection for good.
+        """
         async with self._connection_cv:
             if self._client and self._client.is_connected:
                 _LOGGER.debug(
@@ -278,6 +283,8 @@ class PyHatchBabyRestAsync:
         async with self._connection_cv:
             self._connecting = False
             self._client = client
+            if client is not None:
+                self._cancel_reconnect()
             self._connection_cv.notify_all()
 
     async def _client_disconnect(self) -> None:
