@@ -712,6 +712,42 @@ class TestPyHatchBabyRestAsync:
         )
 
     @pytest.mark.asyncio
+    async def test_set_active_favorite(self, api: PyHatchBabyRestAsync):
+        """Test playing a favorite sends the select command."""
+        with patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send:
+            await api.set_active_favorite(3)
+            mock_send.assert_called_once_with("SP03")
+
+        assert api.active_favorite == 3
+
+    @pytest.mark.asyncio
+    async def test_set_active_favorite_none_deselects(self, api: PyHatchBabyRestAsync):
+        """Test deselecting sends slot zero."""
+        with patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send:
+            await api.set_active_favorite(None)
+            mock_send.assert_called_once_with("SP00")
+
+        assert api.active_favorite is None
+
+    @pytest.mark.asyncio
+    async def test_set_active_favorite_settles_like_other_commands(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test playing a favorite holds off advertisements.
+
+        Unlike reading a stored favorite, this changes colour, sound and
+        volume at once, so a stale advertisement would undo it.
+        """
+        api._settle_until = 0.0
+        mock_client = AsyncMock()
+        api._client = mock_client
+
+        with patch.object(api, "_client_connect", new_callable=AsyncMock):
+            await api.set_active_favorite(1)
+
+        assert api._settle_until > 0.0
+
+    @pytest.mark.asyncio
     async def test_refresh_favorite_stores_what_came_back(
         self, api: PyHatchBabyRestAsync
     ):

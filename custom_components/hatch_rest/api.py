@@ -795,6 +795,20 @@ class PyHatchBabyRestAsync:
                     monotonic() - start,  # pyright: ignore[reportPossiblyUnboundVariable]
                 )
 
+    async def set_active_favorite(self, slot: int | None):
+        """Play a stored favorite, or none of them.
+
+        Goes through the ordinary command path rather than the favorites one:
+        selecting a favorite changes colour, sound and volume together, so the
+        settle window is needed to stop an advertisement describing the state
+        before it from undoing what was applied optimistically.
+        """
+        command = f"SP{slot or 0:02x}"
+        _LOGGER.debug("API command: set_active_favorite(%s)", slot)
+        self.active_favorite = slot
+        self._notify_state_changed()
+        await self._send_command(command)
+
     async def turn_power_on(self):
         """Power on the Hatch Rest device."""
         command = f"SI{1:02x}"
