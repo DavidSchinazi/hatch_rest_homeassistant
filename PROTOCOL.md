@@ -159,14 +159,27 @@ what we see, though we have never observed an error reply.
 
 ## The sleep timer
 
-`SD{ssss}` sets it, in **seconds**, four hex digits. `GI` asks whether one is running and `GD` how
-many minutes are left — note that setting and reporting use different units.
+`GI` asks whether a timer is running and `GD` how many minutes are left.
+
+**`SD{ssss}` does not work — Contradicted.** Both sources document it as setting the timer in
+seconds, four hex digits, and neither says it was tested. On our devices it is accepted and then
+ignored:
+
+- Four attempts, two devices: `SD00b4`, `SD00b4`, `SD0960`, `SD01e0`.
+- Every one was acknowledged with `OK`.
+- `GI` answered `FF` immediately afterwards each time — no timer running.
+- Neither device switched off when its timer should have elapsed, with the light on and sound
+  playing throughout.
+
+`SD0960` contains no hex letters, so lowercase digits are not the problem. What is wrong — the
+unit, the framing, a terminator like the one `ST` carries, or the command itself — is **unknown**.
+Reading the timer works; setting it is not implemented here until there is something that does.
 
 **Confirmed**: an idle device answers `GI` with `FF` on three of our four devices and `00` on the
 fourth, which the notes do not mention. Both mean the same thing.
 
-**Unconfirmed**: what `GI` answers while a timer *is* running. We have never seen one, so the
-integration logs that reply as it arrives rather than interpreting it, and asks `GD` for the
+**Unconfirmed**: what `GI` answers while a timer *is* running. We have never managed to start one,
+so the integration logs that reply as it arrives rather than interpreting it, and asks `GD` for the
 figure it actually uses.
 
 ## Favorites
@@ -362,3 +375,5 @@ check — its README links to reverse-engineering notes that were never committe
 | Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |
 | Schedule bytes 1-4 | a modified timestamp | the start time, read as UTC |
 | Schedule bytes 7-8 | the hour and minute | the duration, in seconds |
+| Schedule bytes 11-12 | padding | the app's Toddler Lock |
+| `SD` sets the sleep timer | in seconds, four hex digits | acknowledged and ignored |

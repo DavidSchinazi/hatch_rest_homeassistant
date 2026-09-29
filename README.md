@@ -63,9 +63,6 @@ father, so no promises.
 * One per schedule, showing what each of the ten slots is set to
 * Time remaining on the sleep timer
 
-### 🔢 Number
-* The sleep timer, in minutes. Zero cancels it
-
 ## ⭐ Favorites
 
 The six favorites stored on the device can be read and rewritten from Home
