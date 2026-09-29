@@ -390,6 +390,7 @@ class PyHatchBabyRestAsync:
                 name,
             )
             store.setdefault(slot, {})["name"] = name
+            self._notify_state_changed()
 
         elif self._text_reply is not None:
             text = bytes(data).decode("ascii", errors="ignore").strip()
@@ -447,6 +448,12 @@ class PyHatchBabyRestAsync:
 
         _LOGGER.debug("%s %s %d: %s", self.address, kind, slot, parsed)
         store.setdefault(slot, {}).update(parsed)
+        # Favorites and schedules do not go through _apply_state, which is
+        # what usually publishes, and that only fires when the device's own
+        # state changes. An idle Hatch can go minutes without one, so without
+        # this the entities showing these sit at unknown long after the
+        # answer has arrived.
+        self._notify_state_changed()
         self._resolve(self._block_reply, parsed)
 
     @staticmethod

@@ -1359,6 +1359,32 @@ class TestPyHatchBabyRestAsync:
         assert api.favorites == {}
 
     @pytest.mark.asyncio
+    async def test_reading_a_block_tells_home_assistant(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the answer is published rather than just stored.
+
+        Favorites and schedules do not go through _apply_state, which is what
+        normally publishes, and that only fires when the device's own state
+        changes. An idle Hatch can go minutes without one, so an answer that
+        is only stored leaves the entities reading unknown until something
+        unrelated happens to move.
+        """
+        published = MagicMock()
+        api.set_state_changed_callback(published)
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(None, bytearray(b"\x85Bed Time\x00"))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_schedule(2)
+
+        # Once for the block, once for the name that followed it.
+        assert published.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_refresh_schedules_asks_for_every_slot(
         self, api: PyHatchBabyRestAsync
     ):
