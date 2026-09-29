@@ -357,17 +357,20 @@ TestA             07  enabled         Bed Time          05  disabled
 TestB             07  enabled         Wake up Weekend   05  disabled
 ```
 
-and by `ESL40` sent to an empty slot, which moved its status from `0x00` to exactly `0x02`. The
+and by both directions of writing it: `ESLc0` from Home Assistant took Nap Time from `0x04` to
+`0x06`, and disabling TestA and TestB in the app took both from `0x07` to `0x05`. Before either,
+`ESL40` sent to an empty slot had moved its status from `0x00` to exactly `0x02`. The
 other bits are unknown; `0x04` is set on every populated slot seen, and `0x85` turned up once in
 older captures.
 
 A red herring worth recording: byte 17 of the block moved from `0xff` to `0x00` when the app enabled
-"Time to Rise", and reads `0x00` on both TestA and TestB — but also on Nap Time, which is disabled.
-What it means is unknown.
+"Time to Rise", and read `0x00` on both TestA and TestB — but also on Nap Time while it was
+disabled, and it stayed `0x00` on TestA and TestB after the app disabled them. What it means is
+unknown.
 
 An empty slot is all zeros in both replies.
 
-### Enabling and disabling — **Inherited**
+### Enabling and disabling — **Confirmed**
 
 ```
 ESB{NN}     select the slot to write, uppercase hex as EGB takes it
@@ -375,14 +378,14 @@ ESL{ff}     c0 to enable, 80 to disable
 ESF         commit; answered with the slot number in ASCII ("04"), then OK
 ```
 
-Every one of these is acknowledged. `ESL`'s `0x40` appears to land as `0x02` of the status byte:
-`ESL40` to an empty slot set exactly that. Whether `ESLc0` enables a populated program is
-**unconfirmed** — the only attempt on one, `ESL9f`, was a disable sent to a program already
-disabled, and changed nothing.
+`ESLc0` enabled Nap Time on a real device: the app showed it enabled afterwards, and the status
+byte read back `0x06` where it had been `0x04`. `ESL`'s `0x40` lands as `0x02` of the status byte.
 
-Also **unconfirmed**: whether `ESF` commits only the state, or — as `PSF` does for a favorite —
-every field the device has collected. The slot is read back after every write and anything other
-than the status that moved is logged as a warning.
+`ESF` commits only that. The 20-byte block read back identical, so unlike a favorite's `PSF` it does
+not rewrite fields it was not sent. The slot is still read back after every write, and anything
+other than the status that moved is logged as a warning.
+
+Disabling from Home Assistant (`ESL80`) has not been exercised on a populated program yet.
 
 ### Names
 
@@ -394,7 +397,8 @@ zero bytes.
 
 The leading byte is the program's status, `0x02` of which is whether it is enabled — see
 [Whether a program is enabled](#whether-a-program-is-enabled--contradicted). Bytes after the name's
-NUL are not always zero ("Bed Time" is followed by `ff81008000ffff`), and are not understood.
+NUL are not always zero ("Bed Time" is followed by `ff81008000ffff`, and TestA and TestB gained a
+`0x65` there when the app disabled them), and are not understood.
 
 A second fork, `SiloCityLabs/hatch-rest-gen1`, implements programs with a different and larger
 command set. Where it overlaps wmbest2 it agrees; where it does not, its provenance is harder to
