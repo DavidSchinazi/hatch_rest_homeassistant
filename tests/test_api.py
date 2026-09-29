@@ -13,6 +13,7 @@ from custom_components.hatch_rest.api import (
     HatchRestConnectionError,
     PyHatchBabyRestAsync,
     _assert_marker,
+    _build_favorite_commands,
     _parse_favorite_block,
     _parse_state,
 )
@@ -191,6 +192,61 @@ class TestParseFavoriteBlock:
 
         with pytest.raises(ValueError):
             _parse_favorite_block(payload)
+
+
+class TestBuildFavoriteCommands:
+    """Tests for the sequence that rewrites a stored favorite."""
+
+    def test_sequence_and_order(self):
+        """Test the six commands come out in the order the device expects."""
+        assert _build_favorite_commands(
+            3, (253, 209, 45), 127, 7, 84, enabled=True
+        ) == [
+            "PSB03",
+            "PSCfdd12d7f",
+            "PSN07",
+            "PSV54",
+            "PSLc0",
+            "PSF",
+        ]
+
+    def test_colour_goes_out_red_first(self):
+        """Test the write order is RGB, the reverse of how it comes back.
+
+        Reading gives blue first. Writing in that same order would swap red
+        and blue every time a favorite was saved.
+        """
+        commands = _build_favorite_commands(1, (0xAA, 0xBB, 0xCC), 0, 0, 0, True)
+
+        assert commands[1] == "PSCaabbcc00"
+        assert commands[1] != "PSCccbbaa00"
+
+    def test_disabled_flag(self):
+        """Test a disabled favorite is written with the other flag."""
+        commands = _build_favorite_commands(1, (0, 0, 0), 0, 0, 0, enabled=False)
+
+        assert commands[4] == "PSL80"
+
+    def test_round_trips_a_decoded_block(self):
+        """Test what was read back can be written out unchanged.
+
+        This is the pairing that matters: the decoder reads blue first and the
+        builder writes red first, so a round trip catches either being wrong.
+        """
+        favorite = _parse_favorite_block(FAVORITE_BLOCK)
+
+        commands = _build_favorite_commands(
+            2,
+            favorite["color"],
+            favorite["brightness"],
+            favorite["sound_id"],
+            favorite["volume"],
+            favorite["enabled"],
+        )
+
+        # The colour bytes in the block, read straight off the wire.
+        assert FAVORITE_BLOCK[12:9:-1].hex() == "fdd12d"
+        assert commands[1] == "PSCfdd12d7f"
 
 
 class TestPyHatchBabyRestAsync:
@@ -841,6 +897,143 @@ class TestPyHatchBabyRestAsync:
 
         # The contents were still recorded, since they did arrive.
         assert api.favorites[1]["volume"] == 84
+
+    @staticmethod
+    def _favorite_answers(api: PyHatchBabyRestAsync, block: bytes = FAVORITE_BLOCK):
+        """Return a stand-in device that answers favorite commands."""
+        sent = []
+
+        async def answer(command):
+            sent.append(command)
+            if command.startswith("PGB"):
+                api._list_notification_received(None, bytearray(block))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return sent, answer
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_keeps_what_was_not_given(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test changing one field leaves the rest of the slot alone.
+
+        The commit writes every field at once, so anything not carried over
+        from the current contents would be lost.
+        """
+        sent, answer = self._favorite_answers(api)
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_set_favorite(2, brightness=10)
+
+        # Colour, sound and volume are the ones the block already held.
+        assert "PSCfdd12d0a" in sent
+        assert "PSN05" in sent
+        assert "PSV54" in sent
+        assert "PSLc0" in sent
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_reads_the_slot_first_if_it_has_to(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test an unread slot is fetched before being rewritten."""
+        sent, answer = self._favorite_answers(api)
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_set_favorite(4, volume=20)
+
+        assert sent[0] == "PGB04"
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_refuses_a_slot_it_cannot_read(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a slot that will not report is not written blind.
+
+        Writing it would commit defaults over whatever it actually held.
+        """
+        with (
+            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
+            ),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
+            ),
+            pytest.raises(HatchRestConnectionError, match="favorite 5"),
+        ):
+            await api.async_set_favorite(5, volume=20)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("slot", [0, 7, -1])
+    async def test_set_favorite_rejects_a_slot_out_of_range(
+        self, api: PyHatchBabyRestAsync, slot
+    ):
+        """Test only the six real slots are accepted."""
+        with pytest.raises(ValueError, match="not between"):
+            await api.async_set_favorite(slot, volume=1)
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_stops_before_committing_if_a_command_is_lost(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a dropped command aborts the write rather than pressing on.
+
+        Nothing is stored until the commit, so stopping short of it leaves
+        the slot as it was. Carrying on would be worse: had the lost command
+        been the one selecting the slot, the commit would land on whichever
+        slot the device still had selected.
+        """
+        sent = []
+
+        async def answer(command):
+            sent.append(command)
+            if command.startswith("PGB"):
+                api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            if command.startswith("PSN"):
+                # This one goes unanswered.
+                return
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
+            ),
+            pytest.raises(HatchRestConnectionError, match="did not acknowledge PSN"),
+        ):
+            await api.async_set_favorite(2, brightness=10)
+
+        assert "PSF" not in sent
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_warns_when_the_slot_did_not_take(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a slot that reads back differently is reported.
+
+        The byte layout here is reverse engineered, so a write that lands
+        somewhere unintended should say so rather than pass quietly.
+        """
+        _, answer = self._favorite_answers(api)
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            # The device keeps answering with the original block, so the
+            # brightness that was asked for is not what comes back.
+            await api.async_set_favorite(2, brightness=10)
+
+        assert "did not take what was asked for" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_favorite_is_quiet_when_it_took(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test writing back what the slot already held warns about nothing."""
+        _, answer = self._favorite_answers(api)
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_set_favorite(2, brightness=127)
+
+        assert "did not take what was asked for" not in caplog.text
 
     def test_favorite_reply_is_read_while_a_command_is_in_flight(
         self, api: PyHatchBabyRestAsync

@@ -30,6 +30,8 @@ from .const import (
     FAVORITE_BLUE_INDEX,
     FAVORITE_BRIGHTNESS_INDEX,
     FAVORITE_ENABLED_MASK,
+    FAVORITE_FLAG_DISABLED,
+    FAVORITE_FLAG_ENABLED,
     FAVORITE_FLAGS_INDEX,
     FAVORITE_GREEN_INDEX,
     FAVORITE_ACK,
@@ -131,6 +133,33 @@ def _parse_favorite_block(data: bytes) -> dict:
         "volume": data[FAVORITE_VOLUME_INDEX],
         "enabled": bool(data[FAVORITE_FLAGS_INDEX] & FAVORITE_ENABLED_MASK),
     }
+
+
+def _build_favorite_commands(
+    slot: int,
+    color: tuple[int, int, int],
+    brightness: int,
+    sound_id: int,
+    volume: int,
+    enabled: bool,
+) -> list[str]:
+    """Build the sequence that rewrites one stored favorite.
+
+    The order matters and the last command commits: the device collects the
+    fields as they arrive and writes them together. Note the colour goes out
+    red first, the reverse of the order it comes back in.
+    """
+    red, green, blue = color
+    flag = FAVORITE_FLAG_ENABLED if enabled else FAVORITE_FLAG_DISABLED
+
+    return [
+        f"PSB{slot:02x}",
+        f"PSC{red:02x}{green:02x}{blue:02x}{brightness:02x}",
+        f"PSN{sound_id:02x}",
+        f"PSV{volume:02x}",
+        f"PSL{flag:02x}",
+        "PSF",
+    ]
 
 
 class PyHatchBabyRestAsync:
@@ -675,12 +704,106 @@ class PyHatchBabyRestAsync:
 
     async def async_refresh_favorite(self, slot: int) -> dict | None:
         """Ask the device for one stored favorite."""
-        return await self._favorite_exchange(f"PGB{slot:02X}", slot=slot)
+        if not await self._favorite_exchange(f"PGB{slot:02X}", slot=slot):
+            return None
+        return self.favorites.get(slot)
 
-    async def _favorite_exchange(
-        self, command: str, slot: int | None = None
+    async def async_set_favorite(
+        self,
+        slot: int,
+        color: tuple[int, int, int] | None = None,
+        brightness: int | None = None,
+        sound: PyHatchBabyRestSound | int | None = None,
+        volume: int | None = None,
+        enabled: bool | None = None,
     ) -> dict | None:
+        """Rewrite one stored favorite, keeping whatever was not given.
+
+        The commit writes every field at once, so a partial sequence would
+        leave the others at whatever the device had collected rather than at
+        what the slot held. Reading the slot first and filling the gaps from
+        it is what keeps "set the colour" from clearing the sound.
+        """
+        if not 1 <= slot <= FAVORITE_SLOTS:
+            raise ValueError(f"favorite slot {slot} is not between 1 and 6")
+
+        current = self.favorites.get(slot)
+        if current is None:
+            current = await self.async_refresh_favorite(slot)
+        if current is None:
+            raise HatchRestConnectionError(
+                f"{self.address} would not say what favorite {slot} holds, "
+                "so it cannot be changed without discarding the rest of it"
+            )
+
+        if sound is None:
+            sound_id = current["sound_id"]
+        else:
+            sound_id = int(sound)
+
+        wanted = {
+            "color": current["color"] if color is None else color,
+            "brightness": current["brightness"] if brightness is None else brightness,
+            "sound_id": sound_id,
+            "volume": current["volume"] if volume is None else volume,
+            "enabled": current["enabled"] if enabled is None else enabled,
+        }
+        _LOGGER.debug("%s setting favorite %d to %s", self.address, slot, wanted)
+
+        commands = _build_favorite_commands(
+            slot,
+            wanted["color"],
+            wanted["brightness"],
+            wanted["sound_id"],
+            wanted["volume"],
+            wanted["enabled"],
+        )
+        for command in commands:
+            if not await self._favorite_exchange(command):
+                # Nothing is stored until the commit, so stopping short of it
+                # leaves the slot exactly as it was. Carrying on regardless
+                # would be worse than giving up: if it was the command
+                # selecting the slot that went missing, the commit would land
+                # on whichever slot the device still had selected.
+                raise HatchRestConnectionError(
+                    f"{self.address} did not acknowledge {command} while "
+                    f"writing favorite {slot}"
+                )
+
+        # Read it back rather than trust the write: the byte layout here is
+        # reverse engineered, and a slot that took the wrong values should say
+        # so rather than quietly differ from what was asked for.
+        written = await self.async_refresh_favorite(slot)
+        if written is None:
+            _LOGGER.warning(
+                "%s would not say what favorite %d holds after writing it",
+                self.address,
+                slot,
+            )
+        else:
+            differs = {
+                field: (value, written[field])
+                for field, value in wanted.items()
+                if written[field] != value
+            }
+            if differs:
+                _LOGGER.warning(
+                    "%s favorite %d did not take what was asked for: %s",
+                    self.address,
+                    slot,
+                    differs,
+                )
+
+        self._notify_state_changed()
+        return written
+
+    async def _favorite_exchange(self, command: str, slot: int | None = None) -> bool:
         """Send a favorite command and wait for what it replies with.
+
+        Returns whether the device answered. What it answered with, when it
+        is a slot's contents, lands in self.favorites rather than here: a
+        command that only writes has no contents to return, and conflating
+        that with a failure is a mistake waiting to happen.
 
         Only one exchange runs at a time. The replies carry nothing that
         identifies the request, so the only way to know which slot a block
@@ -700,27 +823,26 @@ class PyHatchBabyRestAsync:
             try:
                 await self._write_favorite_command(command)
 
-                favorite = None
                 if slot is not None:
                     async with asyncio.timeout(FAVORITE_REPLY_TIMEOUT_SECONDS):
-                        favorite = await self._favorite_block_reply
+                        await self._favorite_block_reply
 
                 async with asyncio.timeout(FAVORITE_ACK_TIMEOUT_SECONDS):
                     await self._favorite_ack_reply
 
             except TimeoutError:
                 _LOGGER.warning("%s did not answer %s", self.address, command)
-                return None
+                return False
 
             except Exception as e:  # noqa: BLE001
                 _LOGGER.warning("Exception during %s -- %r", command, e)
-                return None
+                return False
 
             finally:
                 self._favorite_block_reply = None
                 self._favorite_ack_reply = None
 
-            return favorite
+            return True
 
     async def _write_favorite_command(self, command: str) -> None:
         """Write a favorite command to the device.

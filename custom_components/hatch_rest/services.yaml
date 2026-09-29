@@ -1,0 +1,65 @@
+set_favorite:
+  name: Set favorite
+  description: >-
+    Write to one of the six favorites stored on a Hatch Rest. Anything left
+    out keeps the value the favorite already holds.
+  target:
+    entity:
+      integration: hatch_rest
+      domain: select
+  fields:
+    slot:
+      name: Slot
+      description: Which of the six favorites to write to.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 6
+          mode: box
+    rgb_color:
+      name: Color
+      description: The color the favorite should light up.
+      selector:
+        color_rgb:
+    brightness:
+      name: Brightness
+      description: How bright the light should be, from off to full.
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+    sound:
+      name: Sound
+      description: Which sound the favorite should play.
+      selector:
+        select:
+          options:
+            - none
+            - stream
+            - noise
+            - dryer
+            - ocean
+            - wind
+            - rain
+            - bird
+            - crickets
+            - brahms
+            - twinkle
+            - rockabye
+    volume:
+      name: Volume
+      description: How loud that sound should be.
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+    enabled:
+      name: Enabled
+      description: >-
+        Whether the favorite is offered when cycling through them on the
+        device itself.
+      selector:
+        boolean:

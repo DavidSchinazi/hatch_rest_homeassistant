@@ -64,6 +64,11 @@ FAVORITE_REPLY_TIMEOUT_SECONDS = 3
 FAVORITE_ACK = b"OK"
 FAVORITE_ACK_TIMEOUT_SECONDS = 1
 
+# The flags byte written back to a slot. Only the enabled bit is understood;
+# the low bits are whatever the device already had there.
+FAVORITE_FLAG_ENABLED = 0xC0
+FAVORITE_FLAG_DISABLED = 0x80
+
 # Offsets of those markers within the feedback characteristic:
 # T .. .. .. .. C r g b br S sn vol P pwr
 FEEDBACK_COLOR_INDEX = 5

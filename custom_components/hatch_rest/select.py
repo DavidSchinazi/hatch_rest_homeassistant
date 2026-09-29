@@ -3,18 +3,38 @@
 import logging
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import FAVORITE_SLOTS
+from .const import FAVORITE_SLOTS, PyHatchBabyRestSound
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 # What to call the option that plays nothing in particular.
 OPTION_NONE = "None"
+
+SERVICE_SET_FAVORITE = "set_favorite"
+
+# Everything but the slot is optional: whatever is left out keeps the value
+# the slot already holds.
+SET_FAVORITE_SCHEMA = {
+    vol.Required("slot"): vol.All(
+        vol.Coerce(int), vol.Range(min=1, max=FAVORITE_SLOTS)
+    ),
+    vol.Optional("rgb_color"): vol.All(
+        vol.ExactSequence((cv.byte, cv.byte, cv.byte)), vol.Coerce(tuple)
+    ),
+    vol.Optional("brightness"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+    vol.Optional("sound"): vol.In([sound.name for sound in PyHatchBabyRestSound]),
+    vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+    vol.Optional("enabled"): cv.boolean,
+}
 
 
 async def async_setup_entry(
@@ -24,6 +44,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up Hatch Rest favorite select."""
     coordinator = config_entry.runtime_data
+
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_SET_FAVORITE,
+        SET_FAVORITE_SCHEMA,
+        "async_set_favorite",
+    )
+
     async_add_entities(
         [HatchBabyRestFavoriteSelect(coordinator)], update_before_add=False
     )
@@ -123,3 +151,23 @@ class HatchBabyRestFavoriteSelect(HatchBabyRestEntity, SelectEntity):  # pyright
                 return
 
         raise ValueError(f"{option} is not one of {self.options}")
+
+    async def async_set_favorite(
+        self,
+        slot: int,
+        rgb_color: tuple[int, int, int] | None = None,
+        brightness: int | None = None,
+        sound: str | None = None,
+        volume: int | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        """Write to one of the device's stored favorites."""
+        _LOGGER.debug("select setting favorite %d", slot)
+        await self._hatch_rest_device.async_set_favorite(
+            slot,
+            color=rgb_color,
+            brightness=brightness,
+            sound=PyHatchBabyRestSound[sound] if sound else None,
+            volume=volume,
+            enabled=enabled,
+        )

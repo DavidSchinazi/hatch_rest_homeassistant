@@ -1,5 +1,6 @@
 """Tests for Hatch Rest favorite select entity."""
 
+import pathlib
 from unittest.mock import AsyncMock
 
 import pytest
@@ -168,3 +169,74 @@ class TestHatchBabyRestFavoriteSelect:
             await select_entity.async_select_option("Bedtime")
 
         select_entity._hatch_rest_device.set_active_favorite.assert_not_awaited()
+
+
+class TestSetFavoriteService:
+    """Tests for the set_favorite entity service."""
+
+    @pytest.fixture
+    def select_entity(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ) -> HatchBabyRestFavoriteSelect:
+        """Create the select entity over a device that accepts writes."""
+        mock_coordinator.hatch_rest_device.favorites = {}
+        mock_coordinator.hatch_rest_device.async_set_favorite = AsyncMock()
+        return HatchBabyRestFavoriteSelect(mock_coordinator)
+
+    @pytest.mark.asyncio
+    async def test_passes_the_fields_through(
+        self, select_entity: HatchBabyRestFavoriteSelect
+    ):
+        """Test the service maps onto the device call."""
+        await select_entity.async_set_favorite(
+            2,
+            rgb_color=(1, 2, 3),
+            brightness=10,
+            sound="ocean",
+            volume=20,
+            enabled=True,
+        )
+
+        select_entity._hatch_rest_device.async_set_favorite.assert_awaited_once_with(
+            2,
+            color=(1, 2, 3),
+            brightness=10,
+            sound=PyHatchBabyRestSound.ocean,
+            volume=20,
+            enabled=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_omitted_fields_stay_omitted(
+        self, select_entity: HatchBabyRestFavoriteSelect
+    ):
+        """Test what the caller left out is passed on as left out.
+
+        The device layer fills the gaps from the slot's current contents, so
+        substituting a default here would defeat that.
+        """
+        await select_entity.async_set_favorite(3, volume=50)
+
+        select_entity._hatch_rest_device.async_set_favorite.assert_awaited_once_with(
+            3, color=None, brightness=None, sound=None, volume=50, enabled=None
+        )
+
+    def test_service_schema_offers_every_sound(self):
+        """Test the documented sound list matches the enum.
+
+        A name in services.yaml that is not in the enum would raise a
+        KeyError only once someone picked it.
+        """
+        import yaml
+
+        from custom_components.hatch_rest.select import SET_FAVORITE_SCHEMA
+
+        documented = yaml.safe_load(
+            pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
+        )["set_favorite"]["fields"]["sound"]["selector"]["select"]["options"]
+
+        assert documented == [sound.name for sound in PyHatchBabyRestSound]
+        # And the schema validating the call agrees with the documentation.
+        for name in documented:
+            assert PyHatchBabyRestSound[name] is not None
+        assert SET_FAVORITE_SCHEMA is not None
