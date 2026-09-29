@@ -395,6 +395,17 @@ class PyHatchBabyRestAsync:
         if not data:
             return
 
+        # Raw, because where a program keeps its enabled state is still being
+        # looked for, and the leading byte of a name reply is a suspect that
+        # the parsed name throws away.
+        _LOGGER.debug(
+            "%s reply to %s %s: %s",
+            self.address,
+            self._block_kind_in_flight,
+            self._slot_in_flight,
+            data.hex(),
+        )
+
         if data[0] == BLOCK_HEADER:
             self._handle_block(data)
 
