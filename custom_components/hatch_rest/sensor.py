@@ -89,8 +89,16 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
 
     @property
     def _schedule(self) -> dict | None:
-        """Return this slot's contents, if they have been read."""
-        return self._hatch_rest_device.schedules.get(self._slot)
+        """Return this slot's contents, if its block has been read.
+
+        A slot can hold nothing but a name. Names arrive as their own
+        notification, so one can land before the block it belongs to, or
+        without it at all if the block never parses.
+        """
+        schedule = self._hatch_rest_device.schedules.get(self._slot)
+        if schedule is None or "time" not in schedule:
+            return None
+        return schedule
 
     @property
     def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -131,5 +139,5 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
             # Reported because which bit means enabled is still unsettled,
             # and because a disabled slot is what will settle it.
             "flags": schedule["flags"],
-            "modified_timestamp": schedule["modified_timestamp"],
+            "written_timestamp": schedule["written_timestamp"],
         }

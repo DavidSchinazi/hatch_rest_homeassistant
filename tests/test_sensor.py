@@ -5,10 +5,8 @@ from unittest.mock import MagicMock
 import pytest
 from homeassistant.const import EntityCategory
 
-from custom_components.hatch_rest.const import (
-    SCHEDULE_SLOTS,
-    PyHatchBabyRestSound,
-)
+from custom_components.hatch_rest.api import _parse_schedule_block
+from custom_components.hatch_rest.const import SCHEDULE_SLOTS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.sensor import (
     HatchBabyRestScheduleSensor,
@@ -16,22 +14,12 @@ from custom_components.hatch_rest.sensor import (
     async_setup_entry,
 )
 
-SCHEDULE = {
-    "name": "Weekday Sleep",
-    "time": "07:30",
-    "duration_seconds": 3600,
-    "raw": "01f80db2650728100e000000007f2dd1fd003e40",
-    "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-    "days_mask": 0x3E,
-    "color": (253, 209, 45),
-    "brightness": 127,
-    "sound": PyHatchBabyRestSound.rain,
-    "sound_id": 7,
-    "volume": 40,
-    "enabled": True,
-    "flags": 0x40,
-    "modified_timestamp": 1738000000,
-}
+# Taken from the parser rather than written out by hand. A fixture spelled
+# out separately drifts the moment a field is renamed, and agrees with
+# whatever the entity does with it -- which is how a KeyError reached a
+# device with every test passing.
+SCHEDULE_BLOCK = bytes.fromhex("01f80db2650728100e000000007f2dd1fd003e40")
+SCHEDULE = {**_parse_schedule_block(SCHEDULE_BLOCK), "name": "Weekday Sleep"}
 
 
 class TestHatchBabyRestScheduleSensor:
@@ -111,14 +99,14 @@ class TestHatchBabyRestScheduleSensor:
             "name": "Weekday Sleep",
             "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
             "duration_seconds": 3600,
-            "raw": "01f80db2650728100e000000007f2dd1fd003e40",
+            "raw": SCHEDULE_BLOCK.hex(),
             "color": (253, 209, 45),
             "brightness": 127,
             "sound": "rain",
             "volume": 40,
             "enabled": True,
             "flags": 0x40,
-            "modified_timestamp": 1738000000,
+            "written_timestamp": SCHEDULE["written_timestamp"],
         }
 
     def test_attributes_keep_the_raw_flags_byte(
@@ -210,3 +198,40 @@ class TestSensorEntityCategories:
         nothing about it; this asserts the rule directly instead.
         """
         assert build(mock_coordinator).entity_category is not EntityCategory.CONFIG
+
+
+class TestSensorsAgainstTheParser:
+    """Tests that the sensors only read fields the parser produces."""
+
+    def test_every_attribute_comes_from_a_real_block(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a schedule straight from the parser renders without a KeyError.
+
+        The entity reads the parser's dictionary by key, so a field renamed
+        on one side and not the other throws only once a real block reaches
+        it -- which is not something a hand-written fixture would notice,
+        since it gets renamed to match whatever the entity expects.
+        """
+        mock_coordinator.hatch_rest_device.schedules = {
+            1: _parse_schedule_block(SCHEDULE_BLOCK)
+        }
+        sensor = HatchBabyRestScheduleSensor(mock_coordinator, 1)
+
+        assert sensor.native_value == "07:30"
+        # Every key the entity reaches for has to be one the parser wrote.
+        assert sensor.extra_state_attributes["written_timestamp"] is not None
+
+    def test_a_slot_known_only_by_name_does_not_throw(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a name arriving before its block leaves the sensor usable.
+
+        Names come as their own notification, so a slot can hold nothing but
+        a name for a moment -- or for good, if the block never parses.
+        """
+        mock_coordinator.hatch_rest_device.schedules = {1: {"name": "Bed Time"}}
+        sensor = HatchBabyRestScheduleSensor(mock_coordinator, 1)
+
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {}
