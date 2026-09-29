@@ -284,7 +284,7 @@ A program fed to the favorite parser does not fail — it returns a plausible fa
 from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
 
 ```
-[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×2] [lock LE ×2] [brightness] [B] [G] [R] [00] [days] [flags]
+[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×2] [lock LE ×2] [brightness] [B] [G] [R] [??] [days] [flags]
    0         1-4         5        6          7-8          9-10       11-12         13      14  15  16   17    18     19
 ```
 
@@ -330,6 +330,9 @@ Hatch app. Exactly one slot changed, and apart from the date half of the start v
 difference was those two bytes going from `0000` to `ff01`. The program's run time was unchanged
 either side, which re-confirms the start-time reading at the same time.
 
+**Confirmed** a second time by two programs created in the app on the same device, identical but
+for the toggle: the one with Toddler Lock on reads `ff01` there, the one without `0000`.
+
 `0x01ff` is a strange thing to store for something the app presents as a switch, so the integration
 reports only whether it is set and keeps the whole block for whatever the value may otherwise mean.
 
@@ -339,39 +342,59 @@ Its time of day is the run time, which is confirmed. What the date is for is not
 was edited it moved from 2020-01-20 to 2020-01-21 — forward by exactly one day, six years in the
 past, rather than to the date of the edit. So it is not a last-written date, whatever else it is.
 
-`flags & 0x40` is enabled — **confirmed**, and worth stating because the notes give `0x80` for a
-favorite and `0x40` for a program while both are written as `0xc0`, so the write side cannot tell
-them apart. Populated slots read `0xdf` and an empty one `0x9f`: `0x80` is set in both, so it
-cannot be the enabled bit, and `0x40` can.
+### Whether a program is enabled — **Contradicted**
 
-**Contradicted**: the notes put the hour at byte 7 and the minute at byte 8. Real slots give 46:14,
-238:182 and 254:196 there. Those bytes are zero on empty slots, so they are program data of some
-kind, but they are not the time of day. Where the device actually keeps it is **unknown** —
-possibly among bytes 9–12, which the notes call padding and nobody has looked at.
+Not in the block at all. The notes give `flags & 0x40`, but every populated slot on all four devices
+reads `0xdf` there, enabled or not.
+
+Every `EGB` reply is followed by a second, 17-byte notification: a **status byte**, then the name
+as NUL-padded ASCII (see [Names](#names)). Bit `0x02` of the status byte is enabled. **Confirmed**
+against the app on one device, all six populated slots:
+
+```
+Time to Rise      06  enabled         Nap Time          04  disabled
+TestA             07  enabled         Bed Time          05  disabled
+TestB             07  enabled         Wake up Weekend   05  disabled
+```
+
+and by `ESL40` sent to an empty slot, which moved its status from `0x00` to exactly `0x02`. The
+other bits are unknown; `0x04` is set on every populated slot seen, and `0x85` turned up once in
+older captures.
+
+A red herring worth recording: byte 17 of the block moved from `0xff` to `0x00` when the app enabled
+"Time to Rise", and reads `0x00` on both TestA and TestB — but also on Nap Time, which is disabled.
+What it means is unknown.
+
+An empty slot is all zeros in both replies.
 
 ### Enabling and disabling — **Inherited**
 
 ```
 ESB{NN}     select the slot to write, uppercase hex as EGB takes it
-ESL{ff}     flags
-ESF         commit
+ESL{ff}     c0 to enable, 80 to disable
+ESF         commit; answered with the slot number in ASCII ("04"), then OK
 ```
 
-The notes give `c0` for enabled and `80` for disabled. Real slots read `0xdf` and `0x9f`, so the
-integration instead reads the slot, flips only `0x40`, and writes the rest of the byte back as it
-was — which produces the two values actually observed, rather than zeroing bits nobody has
-identified.
+Every one of these is acknowledged. `ESL`'s `0x40` appears to land as `0x02` of the status byte:
+`ESL40` to an empty slot set exactly that. Whether `ESLc0` enables a populated program is
+**unconfirmed** — the only attempt on one, `ESL9f`, was a disable sent to a program already
+disabled, and changed nothing.
 
-**Unconfirmed**: whether `ESF` commits only the flags, or — as `PSF` does for a favorite — every
-field the device has collected. The slot is read back after every write and any field other than
-the flags that moved is logged as a warning.
+Also **unconfirmed**: whether `ESF` commits only the state, or — as `PSF` does for a favorite —
+every field the device has collected. The slot is read back after every write and anything other
+than the status that moved is logged as a warning.
 
 ### Names
 
 **Contradicted.** The notes describe a name notification headed `0x07`. Programs on our devices
-send theirs headed `0x04`, `0x05` or `0x85` — "Ok to Wake", "Nap Time", "Bed Time", "Weekday
-Sleep", "Weekend Wakeup". So the leading byte is not what identifies one; the printable text after
-it is. Favorites still send no name at all.
+send theirs headed anywhere from `0x02` to `0x07`, or `0x85` — "Ok to Wake", "Nap Time", "Bed
+Time", "Weekday Sleep", "Weekend Wakeup". So the leading byte is not what identifies one; the
+printable text after it is. Favorites still send no name at all. An empty slot answers with 17
+zero bytes.
+
+The leading byte is the program's status, `0x02` of which is whether it is enabled — see
+[Whether a program is enabled](#whether-a-program-is-enabled--contradicted). Bytes after the name's
+NUL are not always zero ("Bed Time" is followed by `ff81008000ffff`), and are not understood.
 
 A second fork, `SiloCityLabs/hatch-rest-gen1`, implements programs with a different and larger
 command set. Where it overlaps wmbest2 it agrees; where it does not, its provenance is harder to
@@ -384,7 +407,8 @@ check — its README links to reverse-engineering notes that were never committe
 | Write with response on TX | unsupported | works, thousands of commands |
 | Commit reply | `01` | `OK`, same as every other command |
 | Favorite names | sent as `0x07` blocks | never sent, 24 reads |
-| Program names | sent as `0x07` blocks | sent headed `0x04`, `0x05` or `0x85` |
+| Program names | sent as `0x07` blocks | sent headed `0x02`–`0x07` or `0x85` |
+| Program enabled | `flags & 0x40` | `0x02` of the status byte ahead of the name; flags always `0xdf` |
 | Program hour/minute | bytes 7 and 8 | those hold something else; time not located |
 | Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |
 | Program bytes 1-4 | a modified timestamp | the start time, read as UTC |

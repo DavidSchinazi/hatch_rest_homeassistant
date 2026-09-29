@@ -20,7 +20,14 @@ from custom_components.hatch_rest.switch import (
 # whatever the entity does with it -- which is how a KeyError reached a
 # device with every test passing.
 PROGRAM_BLOCK = bytes.fromhex("01f80db2650728100e000000007f2dd1fd003e40")
-PROGRAM = {**_parse_program_block(PROGRAM_BLOCK), "name": "Weekday Sleep"}
+# What the reply after the block adds: its status byte, 0x02 being enabled,
+# and the name.
+PROGRAM = {
+    **_parse_program_block(PROGRAM_BLOCK),
+    "name": "Weekday Sleep",
+    "status": 0x06,
+    "enabled": True,
+}
 
 
 class TestHatchBabyRestSwitch:
@@ -297,6 +304,7 @@ class TestHatchBabyRestProgramSwitch:
             "sound": "rain",
             "volume": 40,
             "toddler_lock": False,
+            "status": 0x06,
             "flags": 0x40,
             "start_timestamp": PROGRAM["start_timestamp"],
         }
@@ -315,14 +323,19 @@ class TestHatchBabyRestProgramSwitch:
     def test_every_attribute_comes_from_a_real_block(
         self, coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test a program straight from the parser renders without a KeyError."""
+        """Test a program straight from the parser renders without a KeyError.
+
+        Before its status reply has arrived, too: whether it is enabled is
+        then unknown, which is not the same as off.
+        """
         coordinator.hatch_rest_device.programs = {
             1: _parse_program_block(PROGRAM_BLOCK)
         }
         switch = HatchBabyRestProgramSwitch(coordinator, 1)
 
-        assert switch.is_on is True
+        assert switch.is_on is None
         assert switch.extra_state_attributes["start_timestamp"] is not None
+        assert switch.extra_state_attributes["status"] is None
 
     @pytest.mark.asyncio
     async def test_turning_on_enables_the_program(
@@ -345,6 +358,22 @@ class TestHatchBabyRestProgramSwitch:
         coordinator.hatch_rest_device.async_set_program_enabled.assert_awaited_once_with(
             3, False
         )
+
+    def test_an_empty_slot_is_unavailable(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a slot with no program cannot be toggled.
+
+        Enabling it would do nothing, so it should not look like a switch
+        that works.
+        """
+        coordinator.hatch_rest_device.seconds_since_state_update.return_value = 0
+        coordinator.hatch_rest_device.programs[7] = _parse_program_block(
+            bytes.fromhex("01" + "00" * 19)
+        )
+
+        assert HatchBabyRestProgramSwitch(coordinator, 1).available is True
+        assert HatchBabyRestProgramSwitch(coordinator, 7).available is False
 
     def test_is_a_config_entity(self, coordinator: HatchBabyRestUpdateCoordinator):
         """Test programs sit with the device's configuration."""

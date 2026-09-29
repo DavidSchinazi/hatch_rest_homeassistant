@@ -167,6 +167,15 @@ class HatchBabyRestProgramSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright:
         return program
 
     @property
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return whether there is a program here to turn on or off.
+
+        An empty slot has nothing to run, and enabling one does nothing.
+        """
+        program = self._program
+        return super().available and not (program and program.get("empty"))
+
+    @property
     def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Return whether this program is enabled.
 
@@ -175,7 +184,7 @@ class HatchBabyRestProgramSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright:
         program = self._program
         if program is None:
             return None
-        return program["enabled"]
+        return program.get("enabled")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -202,8 +211,11 @@ class HatchBabyRestProgramSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright:
             ),
             "volume": program["volume"],
             "toddler_lock": program["toddler_lock"],
-            # The bits other than enabled are unidentified, and are written
-            # back as they are whenever the switch is flipped.
+            # The byte ahead of the name. 0x02 is enabled; the rest of it is
+            # not understood.
+            "status": program.get("status"),
+            # Nothing is known to read this byte, which every populated slot
+            # seen holds as 0xdf whether it is enabled or not.
             "flags": program["flags"],
             "start_timestamp": program["start_timestamp"],
         }

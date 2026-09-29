@@ -51,7 +51,8 @@ from .const import (
     PROGRAM_CONTENT_FIELDS,
     PROGRAM_DAYS,
     PROGRAM_DAYS_INDEX,
-    PROGRAM_ENABLED_MASK,
+    PROGRAM_FLAG_DISABLED,
+    PROGRAM_FLAG_ENABLED,
     PROGRAM_FLAGS_INDEX,
     PROGRAM_GREEN_INDEX,
     PROGRAM_LOCK_INDEX,
@@ -60,6 +61,8 @@ from .const import (
     PROGRAM_SLOTS,
     PROGRAM_SOUND_INDEX,
     PROGRAM_START_INDEX,
+    PROGRAM_STATUS_ENABLED,
+    PROGRAM_STATUS_LENGTH,
     PROGRAM_VOLUME_INDEX,
     TIMER_NONE,
     FAVORITE_SOUND_INDEX,
@@ -183,23 +186,14 @@ def _build_favorite_commands(
     ]
 
 
-def _build_program_enabled_commands(slot: int, flags: int, enabled: bool) -> list[str]:
+def _build_program_enabled_commands(slot: int, enabled: bool) -> list[str]:
     """Build the sequence that turns one stored program on or off.
 
-    The notes write the flags as c0 or 80, but real slots read 0xdf and 0x9f:
-    the low bits hold something nobody has identified. Flipping only the
-    enabled bit of what the slot already holds keeps them, and produces the
-    two values actually seen on devices rather than one never observed.
-
-    The slot goes out in uppercase hex, as EGB does -- that is the form known
-    to reach slot 10.
+    The flags are the c0 and 80 the notes give. The slot goes out in
+    uppercase hex, as EGB does -- that is the form known to reach slot 10.
     """
-    if enabled:
-        flags |= PROGRAM_ENABLED_MASK
-    else:
-        flags &= ~PROGRAM_ENABLED_MASK
-
-    return [f"ESB{slot:02X}", f"ESL{flags:02x}", "ESF"]
+    flag = PROGRAM_FLAG_ENABLED if enabled else PROGRAM_FLAG_DISABLED
+    return [f"ESB{slot:02X}", f"ESL{flag:02x}", "ESF"]
 
 
 def _parse_hex_reply(text: str | None) -> int | None:
@@ -229,6 +223,8 @@ def _parse_program_block(data: bytes) -> dict:
 
     days = data[PROGRAM_DAYS_INDEX]
     flags = data[PROGRAM_FLAGS_INDEX]
+    # An unused slot is all zeros, which would otherwise read as enabled.
+    empty = not any(data[1:PROGRAM_BLOCK_LENGTH])
 
     # The stored value is a whole unix timestamp, but only its time of day
     # matters, and only read as UTC -- the device writes local wall clock into
@@ -251,7 +247,10 @@ def _parse_program_block(data: bytes) -> dict:
         "sound": sound,
         "sound_id": sound_id,
         "volume": data[PROGRAM_VOLUME_INDEX],
-        "enabled": bool(flags & PROGRAM_ENABLED_MASK),
+        # Whether it is enabled comes separately, with the name.
+        "empty": empty,
+        # Reported because nothing is known to read it: every populated slot
+        # seen holds 0xdf, enabled or not.
         "flags": flags,
         # The app calls this Toddler Lock. It reads as a switch, but holds
         # 0x01ff rather than 1, so only whether it is set is reported.
@@ -395,9 +394,8 @@ class PyHatchBabyRestAsync:
         if not data:
             return
 
-        # Raw, because where a program keeps its enabled state is still being
-        # looked for, and the leading byte of a name reply is a suspect that
-        # the parsed name throws away.
+        # Raw, because several bytes in these replies are still unaccounted
+        # for, and a capture is what settles them.
         _LOGGER.debug(
             "%s reply to %s %s: %s",
             self.address,
@@ -406,7 +404,15 @@ class PyHatchBabyRestAsync:
             data.hex(),
         )
 
-        if data[0] == BLOCK_HEADER:
+        # Before the header test: a status byte of 0x01 is possible, and would
+        # otherwise be taken for a block and dropped for its length.
+        if (
+            self._block_kind_in_flight == BLOCK_PROGRAM
+            and len(data) == PROGRAM_STATUS_LENGTH
+        ):
+            self._handle_program_status(data)
+
+        elif data[0] == BLOCK_HEADER:
             self._handle_block(data)
 
         elif bytes(data) == LIST_ACK:
@@ -497,6 +503,29 @@ class PyHatchBabyRestAsync:
         # answer has arrived.
         self._notify_state_changed()
         self._resolve(self._block_reply, parsed)
+
+    def _handle_program_status(self, data: bytearray) -> None:
+        """File the reply that follows a program block: its status and name.
+
+        Taken whole rather than only when it carries a name, because the
+        status byte in front says whether the program is enabled, and an
+        unnamed program has one too.
+        """
+        slot = self._slot_in_flight
+        if slot is None:
+            return
+
+        status = data[0]
+        program = self.programs.setdefault(slot, {})
+        program["status"] = status
+        program["enabled"] = bool(status & PROGRAM_STATUS_ENABLED)
+        if name := self._parse_name_reply(data):
+            program["name"] = name
+
+        _LOGGER.debug(
+            "%s program %d is named %r, status %#04x", self.address, slot, name, status
+        )
+        self._notify_state_changed()
 
     @staticmethod
     def _parse_name_reply(data: bytes) -> str | None:
@@ -932,21 +961,24 @@ class PyHatchBabyRestAsync:
     async def async_set_program_enabled(self, slot: int, enabled: bool) -> dict | None:
         """Turn one stored program on or off, leaving the rest of it alone.
 
-        The flags byte is written whole, so the slot has to be read first to
-        know what the bits other than enabled should stay as.
+        The slot is read first, both to refuse an empty one -- there is
+        nothing there to run -- and to have something to compare against
+        afterwards.
         """
         if not 1 <= slot <= PROGRAM_SLOTS:
             raise ValueError(f"program slot {slot} is not between 1 and 10")
 
         current = self.programs.get(slot)
-        if current is None or "flags" not in current:
+        if current is None or "enabled" not in current:
             # A slot can hold just a name, which arrives on its own.
             current = await self.async_refresh_program(slot)
-        if current is None or "flags" not in current:
+        if current is None or "enabled" not in current:
             raise HatchRestConnectionError(
                 f"{self.address} would not say what program {slot} holds, "
-                "so it cannot be changed without guessing at its flags"
+                "so it cannot be changed"
             )
+        if current["empty"]:
+            raise ValueError(f"program slot {slot} is empty")
 
         before = {field: current[field] for field in PROGRAM_CONTENT_FIELDS}
         _LOGGER.debug(
@@ -956,7 +988,7 @@ class PyHatchBabyRestAsync:
             slot,
         )
 
-        for command in _build_program_enabled_commands(slot, current["flags"], enabled):
+        for command in _build_program_enabled_commands(slot, enabled):
             if not await self._list_exchange(command):
                 # As with favorites: nothing is stored until the commit, and
                 # committing after a lost select could land on another slot.
@@ -980,8 +1012,8 @@ class PyHatchBabyRestAsync:
                 for field, value in before.items()
                 if written[field] != value
             }
-            if written["enabled"] != enabled:
-                differs["enabled"] = (enabled, written["enabled"])
+            if written.get("enabled") != enabled:
+                differs["enabled"] = (enabled, written.get("enabled"))
             if differs:
                 _LOGGER.warning(
                     "%s program %d did not take what was asked for: %s",

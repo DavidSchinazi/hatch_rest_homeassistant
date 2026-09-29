@@ -25,6 +25,7 @@ from custom_components.hatch_rest.const import (
     ADVERTISEMENT_POWER_INDEX,
     ADVERTISEMENT_SOUND_INDEX,
     BLOCK_FAVORITE,
+    BLOCK_PROGRAM,
     CHAR_FEEDBACK,
     CHAR_LIST,
     CHAR_TX,
@@ -200,7 +201,7 @@ class TestParseFavoriteBlock:
 
 # A stored program as the device returns it: 07:30 on weekdays, rain at
 # volume 40, colour (253, 209, 45) at brightness 127, enabled.
-#  [01][modified LE x4][snd][vol][hr][min][00 x4][bri][B][G][R][00][days][flags]
+#  [01][start LE x4][snd][vol][duration LE x2][00 x4][bri][B][G][R][state][days][flags]
 PROGRAM_BLOCK = bytes.fromhex(
     "01"  # header
     "f80db265"  # start, little endian: a timestamp reading 07:30 as UTC
@@ -210,10 +211,21 @@ PROGRAM_BLOCK = bytes.fromhex(
     "00000000"
     "7f"  # brightness 127
     "2dd1fd"  # colour, blue first: (253, 209, 45)
-    "00"
+    "00"  # state: enabled
     "3e"  # days: Mon-Fri
-    "40"  # flags: enabled
+    "df"  # flags: what every populated slot holds
 )
+
+# Captured from one device, with what its app showed for each. Every EGB
+# reply is a block followed by a status byte and the name.
+TIME_TO_RISE_BLOCK = bytes.fromhex("018842315e002eb211000000007f9ed35d003cdf")
+TIME_TO_RISE_STATUS = bytes.fromhex("0654696d6520746f205269736500000000")  # on
+NAP_TIME_BLOCK = bytes.fromhex("015001235e03333e1c000000007f488eeb007fdf")
+NAP_TIME_STATUS = bytes.fromhex("044e61702054696d650000000000000000")  # off
+BED_TIME_STATUS = bytes.fromhex("054265642054696d6500ff81008000ffff")  # off
+TEST_A_STATUS = bytes.fromhex("0754657374412000000000000000000000")  # on
+EMPTY_PROGRAM_BLOCK = bytes.fromhex("01" + "00" * 19)
+EMPTY_PROGRAM_STATUS = bytes(17)
 
 
 class TestParseProgramBlock:
@@ -318,16 +330,22 @@ class TestParseProgramBlock:
         ]
 
     def test_reports_the_flags_byte_raw(self):
-        """Test the flags byte is exposed, not just its reading.
+        """Test the flags byte is exposed, though nothing reads it."""
+        assert _parse_program_block(PROGRAM_BLOCK)["flags"] == 0xDF
 
-        Which bit means enabled is unsettled -- the notes say 0x40 for a
-        program and 0x80 for a favorite -- so the raw byte is what will
-        settle it against a disabled slot.
+    def test_an_empty_slot_is_all_zeros(self):
+        """Test an unused slot is recognised as one."""
+        assert _parse_program_block(EMPTY_PROGRAM_BLOCK)["empty"] is True
+        assert _parse_program_block(NAP_TIME_BLOCK)["empty"] is False
+
+    def test_the_block_does_not_say_whether_it_is_enabled(self):
+        """Test enabled is left to the status reply that follows.
+
+        Two candidates in the block both failed against the app: the flags
+        byte reads 0xdf on every populated slot, and byte 17 reads 0x00 on
+        Nap Time, which the app shows disabled.
         """
-        program = _parse_program_block(PROGRAM_BLOCK)
-
-        assert program["flags"] == 0x40
-        assert program["enabled"] is True
+        assert "enabled" not in _parse_program_block(NAP_TIME_BLOCK)
 
     def test_reads_the_remaining_fields(self):
         """Test sound, volume and brightness come back."""
@@ -401,30 +419,21 @@ class TestBuildFavoriteCommands:
 class TestBuildProgramEnabledCommands:
     """Tests for the sequence that turns a stored program on or off."""
 
-    def test_sequence_and_order(self):
+    def test_enabling(self):
         """Test select, flags, commit -- in that order."""
-        assert _build_program_enabled_commands(3, 0x9F, enabled=True) == [
+        assert _build_program_enabled_commands(3, enabled=True) == [
             "ESB03",
-            "ESLdf",
+            "ESLc0",
             "ESF",
         ]
 
-    def test_disabling_clears_only_the_enabled_bit(self):
-        """Test the unidentified low bits survive.
-
-        Real slots read 0xdf and 0x9f, so those are what should go back --
-        not the c0 and 80 the notes write, which would zero bits nobody
-        understands.
-        """
-        assert _build_program_enabled_commands(1, 0xDF, enabled=False)[1] == "ESL9f"
-
-    def test_already_in_the_asked_state_is_written_unchanged(self):
-        """Test asking for what the slot already holds changes nothing."""
-        assert _build_program_enabled_commands(1, 0xDF, enabled=True)[1] == "ESLdf"
+    def test_disabling(self):
+        """Test disabling writes the other flag."""
+        assert _build_program_enabled_commands(3, enabled=False)[1] == "ESL80"
 
     def test_slot_ten_goes_out_as_egb_sends_it(self):
         """Test the slot is uppercase hex, the form known to reach slot 10."""
-        assert _build_program_enabled_commands(10, 0xDF, enabled=False)[0] == "ESB0A"
+        assert _build_program_enabled_commands(10, enabled=False)[0] == "ESB0A"
 
 
 class TestPyHatchBabyRestAsync:
@@ -1408,20 +1417,80 @@ class TestPyHatchBabyRestAsync:
         # And it did not end up filed as a favorite.
         assert api.favorites == {}
 
+    def _read_program(self, api: PyHatchBabyRestAsync, slot, block, status):
+        """Feed one program's two replies as if EGB had asked for them."""
+        api._block_kind_in_flight = BLOCK_PROGRAM
+        api._slot_in_flight = slot
+        api._list_notification_received(None, bytearray(block))
+        api._list_notification_received(None, bytearray(status))
+
+    @pytest.mark.parametrize(
+        ("status", "enabled"),
+        [
+            (TIME_TO_RISE_STATUS, True),
+            (TEST_A_STATUS, True),
+            (NAP_TIME_STATUS, False),
+            (BED_TIME_STATUS, False),
+            (EMPTY_PROGRAM_STATUS, False),
+        ],
+    )
+    def test_status_bit_says_whether_a_program_is_enabled(
+        self, api: PyHatchBabyRestAsync, status, enabled
+    ):
+        """Test 0x02 of the byte ahead of the name, against what the app showed."""
+        self._read_program(api, 1, NAP_TIME_BLOCK, status)
+
+        assert api.programs[1]["enabled"] is enabled
+        assert api.programs[1]["status"] == status[0]
+
+    def test_status_reply_carries_the_name(self, api: PyHatchBabyRestAsync):
+        """Test the name still comes out of the same reply."""
+        self._read_program(api, 3, NAP_TIME_BLOCK, BED_TIME_STATUS)
+
+        assert api.programs[3]["name"] == "Bed Time"
+
+    def test_status_of_one_is_not_taken_for_a_block(self, api: PyHatchBabyRestAsync):
+        """Test a status byte equal to the block header is still read.
+
+        Both would start 0x01, so which one arrived has to be told by length.
+        """
+        self._read_program(api, 2, NAP_TIME_BLOCK, b"\x01Nap Time" + bytes(8))
+
+        assert api.programs[2]["status"] == 0x01
+        assert api.programs[2]["time"] == "13:00"
+
+    def test_an_unnamed_program_still_reports_its_status(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the status is kept when there is no name to go with it."""
+        self._read_program(api, 5, NAP_TIME_BLOCK, b"\x06" + bytes(16))
+
+        assert api.programs[5]["enabled"] is True
+        assert "name" not in api.programs[5]
+
     @staticmethod
-    def _program_answers(api: PyHatchBabyRestAsync, block: bytes = PROGRAM_BLOCK):
+    def _program_answers(
+        api: PyHatchBabyRestAsync,
+        block: bytes = NAP_TIME_BLOCK,
+        status: bytes = NAP_TIME_STATUS,
+    ):
         """Return a stand-in device that answers program commands.
 
-        It keeps the flags it is sent, so reading the slot back shows them.
+        ESL sets or clears 0x02 of the status, as ESL40 was seen to do to an
+        empty slot, so reading back shows what was written.
         """
         sent = []
-        stored = bytearray(block)
+        stored = bytearray(status)
 
         async def answer(command):
             sent.append(command)
             if command.startswith("ESL"):
-                stored[19] = int(command[3:], 16)
+                if command == "ESLc0":
+                    stored[0] |= 0x02
+                else:
+                    stored[0] &= ~0x02
             if command.startswith("EGB"):
+                api._list_notification_received(None, bytearray(block))
                 api._list_notification_received(None, bytearray(stored))
             api._list_notification_received(None, bytearray(b"OK"))
 
@@ -1435,12 +1504,12 @@ class TestPyHatchBabyRestAsync:
         sent, answer = self._program_answers(api)
 
         with patch.object(api, "_write_list_command", side_effect=answer):
-            written = await api.async_set_program_enabled(4, False)
+            written = await api.async_set_program_enabled(2, True)
 
-        assert sent == ["EGB04", "ESB04", "ESL00", "ESF", "EGB04"]
+        assert sent == ["EGB02", "ESB02", "ESLc0", "ESF", "EGB02"]
         assert written is not None
-        assert written["enabled"] is False
-        assert api.programs[4]["enabled"] is False
+        assert written["enabled"] is True
+        assert api.programs[2]["status"] == 0x06
         assert "did not take" not in caplog.text
 
     @pytest.mark.asyncio
@@ -1448,15 +1517,34 @@ class TestPyHatchBabyRestAsync:
         self, api: PyHatchBabyRestAsync
     ):
         """Test a slot already read is not asked about again before writing."""
-        block = bytearray(PROGRAM_BLOCK)
-        block[19] = 0x9F
-        api.programs[2] = _parse_program_block(block)
-        sent, answer = self._program_answers(api, bytes(block))
+        self._read_program(api, 1, TIME_TO_RISE_BLOCK, TIME_TO_RISE_STATUS)
+        sent, answer = self._program_answers(
+            api, TIME_TO_RISE_BLOCK, TIME_TO_RISE_STATUS
+        )
 
         with patch.object(api, "_write_list_command", side_effect=answer):
-            await api.async_set_program_enabled(2, True)
+            written = await api.async_set_program_enabled(1, False)
 
-        assert sent == ["ESB02", "ESLdf", "ESF", "EGB02"]
+        assert sent == ["ESB01", "ESL80", "ESF", "EGB01"]
+        assert written is not None
+        assert written["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_refuses_an_empty_slot(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test an empty slot is not written: there is nothing to enable."""
+        sent, answer = self._program_answers(
+            api, EMPTY_PROGRAM_BLOCK, EMPTY_PROGRAM_STATUS
+        )
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            pytest.raises(ValueError, match="empty"),
+        ):
+            await api.async_set_program_enabled(7, True)
+
+        assert sent == ["EGB07"]
 
     @pytest.mark.asyncio
     async def test_set_program_enabled_warns_when_the_slot_did_not_take(
@@ -1467,13 +1555,14 @@ class TestPyHatchBabyRestAsync:
         async def answer(command):
             if command.startswith("EGB"):
                 # Ignores the write and keeps answering with the original.
-                api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+                api._list_notification_received(None, bytearray(NAP_TIME_BLOCK))
+                api._list_notification_received(None, bytearray(NAP_TIME_STATUS))
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
-            await api.async_set_program_enabled(1, False)
+            await api.async_set_program_enabled(2, True)
 
-        assert "program 1 did not take what was asked for" in caplog.text
+        assert "program 2 did not take what was asked for" in caplog.text
 
     @pytest.mark.asyncio
     async def test_set_program_enabled_stops_at_an_unacknowledged_command(
@@ -1485,7 +1574,8 @@ class TestPyHatchBabyRestAsync:
         async def answer(command):
             sent.append(command)
             if command.startswith("EGB"):
-                api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+                api._list_notification_received(None, bytearray(NAP_TIME_BLOCK))
+                api._list_notification_received(None, bytearray(NAP_TIME_STATUS))
             if command.startswith("ESB"):
                 return
             api._list_notification_received(None, bytearray(b"OK"))
@@ -1495,7 +1585,7 @@ class TestPyHatchBabyRestAsync:
             patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
             pytest.raises(HatchRestConnectionError, match="did not acknowledge ESB"),
         ):
-            await api.async_set_program_enabled(1, False)
+            await api.async_set_program_enabled(2, True)
 
         assert "ESF" not in sent
 

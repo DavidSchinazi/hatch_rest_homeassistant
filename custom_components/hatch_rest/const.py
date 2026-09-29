@@ -57,7 +57,7 @@ LIST_REPLY_TIMEOUT_SECONDS = 3
 # A program comes back on CHAR_LIST as a 20 byte block sharing its header
 # with a favorite, and differing only in length:
 # [0x01] [start LE x4] [sound] [volume] [duration LE x2] [00 x2] [lock LE x2]
-# [brightness] [B] [G] [R] [00] [days] [flags]
+# [brightness] [B] [G] [R] [?] [days] [flags]
 # Colour is blue first here too.
 #
 # Both published sources have the middle of this wrong. They call bytes 1-4 a
@@ -91,12 +91,26 @@ PROGRAM_RED_INDEX = 16
 PROGRAM_DAYS_INDEX = 18
 PROGRAM_FLAGS_INDEX = 19
 
-# 0x40, settled against real slots: populated ones read 0xdf and an empty one
-# reads 0x9f, so 0x80 cannot be it -- that would call the empty slot enabled.
-# The notes were right, and differ from favorites, which use 0x80.
-PROGRAM_ENABLED_MASK = 0x40
+# Whether a program runs is not in the block at all. Every EGB reply is
+# followed by a second, 17 byte one: a status byte, then the program's name as
+# NUL padded ASCII. Bit 0x02 of that status byte is enabled -- set on the three
+# programs one device's app showed enabled, clear on the three it showed
+# disabled -- and an ESL40 sent to an empty slot moved its status from 0x00 to
+# exactly 0x02. What the other bits are is unknown.
+#
+# Not the flags byte: every populated slot reads 0xdf there, enabled or not.
+# Nor byte 17, which moved from 0xff to 0x00 when the app enabled a program
+# but reads 0x00 on one the app shows disabled.
+PROGRAM_STATUS_LENGTH = 17
+PROGRAM_STATUS_ENABLED = 0x02
 
-# The fields a program keeps when only its enabled bit is flipped. The start
+# What ESL writes to turn a program on or off, as the notes give it. Whatever
+# the device does with it, it is not stored in the flags byte: that read 0xdf
+# both before and after an ESL9f.
+PROGRAM_FLAG_ENABLED = 0xC0
+PROGRAM_FLAG_DISABLED = 0x80
+
+# The fields a program keeps when only whether it is enabled changes. The start
 # timestamp is left out: its date half moves on its own when a slot is
 # written, and only its time of day -- already covered by "time" -- matters.
 PROGRAM_CONTENT_FIELDS = (
