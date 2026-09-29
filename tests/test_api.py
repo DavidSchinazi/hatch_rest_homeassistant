@@ -1377,26 +1377,46 @@ class TestPyHatchBabyRestAsync:
         assert len(api.schedules) == 10
 
     @pytest.mark.asyncio
-    async def test_refresh_timer_reads_nothing_running(self, api: PyHatchBabyRestAsync):
-        """Test FF from the device means no timer, not a duration.
+    @pytest.mark.parametrize("idle_reply", [b"FF", b"00"])
+    async def test_refresh_timer_reads_an_idle_device(
+        self, api: PyHatchBabyRestAsync, idle_reply
+    ):
+        """Test both ways a device says it has no timer.
 
-        This is the reply an idle device gives, so reading it as a number
-        would invent a timer on every device that has none.
+        Three of four devices here answer FF, which is what the protocol
+        notes describe. The fourth answers 00, and reading that as a duration
+        would report a timer permanently sitting at zero.
         """
         asked = []
 
         async def answer(command):
             asked.append(command)
-            api._list_notification_received(None, bytearray(b"FF"))
+            api._list_notification_received(None, bytearray(idle_reply))
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
-        # Having been told there is none, it does not go on to ask how long.
         assert asked == ["GI"]
         assert api.timer_remaining is None
         assert api.timer_total is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_timer_treats_nothing_left_as_no_timer(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a timer with zero minutes left is not a timer."""
+
+        async def answer(command):
+            api._list_notification_received(
+                None, bytearray(b"0020" if command == "GI" else b"0000")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        assert api.timer_remaining is None
 
     @pytest.mark.asyncio
     async def test_refresh_timer_reads_the_remaining_minutes(

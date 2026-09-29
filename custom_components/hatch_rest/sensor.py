@@ -70,7 +70,9 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
     device holds and changes nothing.
     """
 
-    _attr_entity_category = EntityCategory.CONFIG
+    # Diagnostic rather than config: a sensor cannot configure anything, and
+    # Home Assistant refuses to add one that claims it can.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator, slot: int) -> None:
         """Initialize the sensor for one slot."""

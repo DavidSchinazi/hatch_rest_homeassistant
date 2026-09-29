@@ -144,11 +144,11 @@ class TestHatchBabyRestScheduleSensor:
 
         assert attributes["sound"] == 8
 
-    def test_is_a_config_entity(self, coordinator: HatchBabyRestUpdateCoordinator):
-        """Test schedules sit with the device's configuration."""
+    def test_is_a_diagnostic_entity(self, coordinator: HatchBabyRestUpdateCoordinator):
+        """Test schedules are filed as diagnostic rather than configuration."""
         sensor = HatchBabyRestScheduleSensor(coordinator, 1)
 
-        assert sensor.entity_category is EntityCategory.CONFIG
+        assert sensor.entity_category is EntityCategory.DIAGNOSTIC
 
 
 class TestHatchBabyRestTimerSensor:
@@ -185,3 +185,26 @@ class TestHatchBabyRestTimerSensor:
         ids.add(HatchBabyRestTimerSensor(mock_coordinator).unique_id)
 
         assert len(ids) == SCHEDULE_SLOTS + 1
+
+
+class TestSensorEntityCategories:
+    """Tests that the sensors declare a category Home Assistant will accept."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda coordinator: HatchBabyRestScheduleSensor(coordinator, 1),
+            HatchBabyRestTimerSensor,
+        ],
+    )
+    def test_no_sensor_claims_to_be_configuration(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator, build
+    ):
+        """Test no sensor uses the config category.
+
+        SensorEntity.async_internal_added_to_hass raises outright on one that
+        does -- a sensor reports state and cannot configure anything. It fails
+        at the point of being added, so constructing the entity in a test says
+        nothing about it; this asserts the rule directly instead.
+        """
+        assert build(mock_coordinator).entity_category is not EntityCategory.CONFIG

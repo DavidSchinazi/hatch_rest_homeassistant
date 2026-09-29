@@ -182,6 +182,14 @@ def _build_favorite_commands(
     ]
 
 
+def _parse_hex_reply(text: str | None) -> int | None:
+    """Read one of the short ASCII hex answers, or None if it is not one."""
+    try:
+        return int(text, 16)  # pyright: ignore[reportArgumentType]
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_schedule_block(data: bytes) -> dict:
     """Parse one stored schedule out of a reply to EGB.
 
@@ -988,35 +996,46 @@ class PyHatchBabyRestAsync:
         if not await self._list_exchange("GI", text=True):
             return
 
-        if self._last_text == TIMER_NONE:
-            self.timer_total = None
-            self._timer_expires_at = None
-            _LOGGER.debug("%s has no sleep timer running", self.address)
+        total = _parse_hex_reply(self._last_text)
+        if self._last_text == TIMER_NONE or not total:
+            # Some devices say FF for this and some say 00. Either way there
+            # is nothing to count down, and no point asking how much is left.
+            self._clear_timer()
+            _LOGGER.debug(
+                "%s has no sleep timer running (%r)", self.address, self._last_text
+            )
             return
 
-        # What this means when a timer IS running has not been confirmed, so
-        # it is logged as it arrives rather than interpreted.
+        # What the total means when a timer IS running has not been confirmed,
+        # so it is logged as it arrives rather than interpreted.
         _LOGGER.debug(
             "%s sleep timer total reported as %r", self.address, self._last_text
         )
-        try:
-            self.timer_total = int(self._last_text, 16)  # pyright: ignore[reportArgumentType]
-        except (TypeError, ValueError):
-            self.timer_total = None
+        self.timer_total = total
 
         if not await self._list_exchange("GD", text=True):
             return
 
-        try:
-            minutes = int(self._last_text, 16)  # pyright: ignore[reportArgumentType]
-        except (TypeError, ValueError):
+        minutes = _parse_hex_reply(self._last_text)
+        if minutes is None:
             _LOGGER.debug(
                 "%s gave %r for time remaining", self.address, self._last_text
             )
             return
 
+        if not minutes:
+            # A timer with nothing left to run is one that is not running.
+            self._clear_timer()
+            _LOGGER.debug("%s has no sleep timer left to run", self.address)
+            return
+
         _LOGGER.debug("%s has %d minutes of sleep timer left", self.address, minutes)
         self._timer_expires_at = monotonic() + minutes * 60
+
+    def _clear_timer(self) -> None:
+        """Forget any sleep timer this device was thought to be running."""
+        self.timer_total = None
+        self._timer_expires_at = None
 
     async def _list_exchange(
         self,

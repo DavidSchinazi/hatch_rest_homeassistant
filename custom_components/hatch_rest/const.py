@@ -86,9 +86,12 @@ SCHEDULE_ENABLED_MASK = 0x40
 SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
 # The sleep timer answers in short ASCII hex rather than a block. GI says
-# whether one is running, answering FF when none is; GD gives what is left,
-# in minutes, as four hex digits. Note the asymmetry with setting it, which
-# takes seconds.
+# whether one is running, GD gives what is left in minutes. Note the asymmetry
+# with setting it, which takes seconds.
+#
+# The protocol notes say an idle device answers GI with FF, and three of four
+# devices here do. The fourth answers 00, and then answers GD with 0000, so a
+# total or a remainder of zero means the same thing: nothing is running.
 TIMER_NONE = "FF"
 
 # Both kinds of block share the 0x01 header, so which one a reply is can only
