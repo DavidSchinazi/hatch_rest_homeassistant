@@ -221,35 +221,15 @@ class TestSetFavoriteService:
             3, color=None, brightness=None, sound=None, volume=50, enabled=None
         )
 
-    def test_service_schema_offers_every_sound(self):
-        """Test the documented sound list matches the enum.
-
-        A name in services.yaml that is not in the enum would raise a
-        KeyError only once someone picked it.
-        """
-        import yaml
-
-        from custom_components.hatch_rest.select import SET_FAVORITE_SCHEMA
-
-        documented = yaml.safe_load(
-            pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
-        )["set_favorite"]["fields"]["sound"]["selector"]["select"]["options"]
-
-        assert documented == [sound.name for sound in PyHatchBabyRestSound]
-        # And the schema validating the call agrees with the documentation.
-        for name in documented:
-            assert PyHatchBabyRestSound[name] is not None
-        assert SET_FAVORITE_SCHEMA is not None
-
 
 class TestServiceRegistration:
-    """Tests that the service is actually wired up on platform setup."""
+    """Tests that the services are actually wired up on platform setup."""
 
     @pytest.mark.asyncio
-    async def test_setup_registers_the_service(
+    async def test_setup_registers_the_services(
         self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test setting up the platform registers set_favorite.
+        """Test setting up the platform registers both favorite services.
 
         The registration is easy to get wrong in a way nothing else catches:
         the service simply never appears, and the entity looks fine.
@@ -257,6 +237,7 @@ class TestServiceRegistration:
         from unittest.mock import MagicMock, patch
 
         from custom_components.hatch_rest.select import (
+            SERVICE_SAVE_FAVORITE,
             SERVICE_SET_FAVORITE,
             async_setup_entry,
         )
@@ -272,10 +253,51 @@ class TestServiceRegistration:
         ):
             await async_setup_entry(hass, config_entry, MagicMock())
 
-        platform.async_register_entity_service.assert_called_once()
-        name, schema, func = platform.async_register_entity_service.call_args.args
-        assert name == SERVICE_SET_FAVORITE
-        assert func == "async_set_favorite"
-        # The method the service dispatches to has to exist on the entity.
-        assert hasattr(HatchBabyRestFavoriteSelect, func)
-        assert "slot" in {str(key) for key in schema}
+        registered = {
+            call.args[0]: call.args
+            for call in platform.async_register_entity_service.call_args_list
+        }
+
+        assert set(registered) == {SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE}
+
+        for name, (_, schema, func) in registered.items():
+            # The method each service dispatches to has to exist on the entity.
+            assert hasattr(HatchBabyRestFavoriteSelect, func), name
+            # And every service takes the slot it is meant to act on.
+            assert "slot" in {str(key) for key in schema}, name
+
+    def test_every_service_is_documented(self):
+        """Test each registered service has an entry in services.yaml.
+
+        A service missing from there still works, but shows up in the UI
+        under its raw name with no fields, which looks broken.
+        """
+        import yaml
+
+        from custom_components.hatch_rest.select import (
+            SERVICE_SAVE_FAVORITE,
+            SERVICE_SET_FAVORITE,
+        )
+
+        documented = yaml.safe_load(
+            pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
+        )
+
+        assert set(documented) == {SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE}
+        for name, spec in documented.items():
+            assert spec["target"]["entity"]["domain"] == "select", name
+            assert spec["fields"]["slot"]["required"] is True, name
+
+    def test_service_schema_offers_every_sound(self):
+        """Test the documented sound list matches the enum.
+
+        A name in services.yaml that is not in the enum would raise a
+        KeyError only once someone picked it.
+        """
+        import yaml
+
+        documented = yaml.safe_load(
+            pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
+        )["set_favorite"]["fields"]["sound"]["selector"]["select"]["options"]
+
+        assert documented == [sound.name for sound in PyHatchBabyRestSound]

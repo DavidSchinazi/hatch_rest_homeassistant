@@ -22,7 +22,13 @@ from .coordinator import HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LIGHT, Platform.MEDIA_PLAYER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [
+    Platform.BUTTON,
+    Platform.LIGHT,
+    Platform.MEDIA_PLAYER,
+    Platform.SELECT,
+    Platform.SWITCH,
+]
 
 
 # async_setup_entry handles the setup of individual configuration

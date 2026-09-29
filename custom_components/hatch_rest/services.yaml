@@ -63,3 +63,25 @@ set_favorite:
         device itself.
       selector:
         boolean:
+
+save_favorite:
+  name: Save favorite
+  description: >-
+    Save whatever the Hatch Rest is playing right now into one of its six
+    favorites. Set the light and sound how you want them first, then call
+    this. Whether the favorite is offered on the device itself is left as it
+    was.
+  target:
+    entity:
+      integration: hatch_rest
+      domain: select
+  fields:
+    slot:
+      name: Slot
+      description: Which of the six favorites to overwrite.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 6
+          mode: box

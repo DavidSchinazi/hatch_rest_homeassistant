@@ -20,13 +20,16 @@ _LOGGER = logging.getLogger(__name__)
 OPTION_NONE = "None"
 
 SERVICE_SET_FAVORITE = "set_favorite"
+SERVICE_SAVE_FAVORITE = "save_favorite"
+
+SLOT_SCHEMA = {
+    vol.Required("slot"): vol.All(vol.Coerce(int), vol.Range(min=1, max=FAVORITE_SLOTS))
+}
 
 # Everything but the slot is optional: whatever is left out keeps the value
 # the slot already holds.
 SET_FAVORITE_SCHEMA = {
-    vol.Required("slot"): vol.All(
-        vol.Coerce(int), vol.Range(min=1, max=FAVORITE_SLOTS)
-    ),
+    **SLOT_SCHEMA,
     vol.Optional("rgb_color"): vol.All(
         vol.ExactSequence((cv.byte, cv.byte, cv.byte)), vol.Coerce(tuple)
     ),
@@ -50,6 +53,11 @@ async def async_setup_entry(
         SERVICE_SET_FAVORITE,
         SET_FAVORITE_SCHEMA,
         "async_set_favorite",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SAVE_FAVORITE,
+        SLOT_SCHEMA,
+        "async_save_favorite",
     )
 
     async_add_entities(
@@ -171,3 +179,8 @@ class HatchBabyRestFavoriteSelect(HatchBabyRestEntity, SelectEntity):  # pyright
             volume=volume,
             enabled=enabled,
         )
+
+    async def async_save_favorite(self, slot: int) -> None:
+        """Save what the device is playing now into one of its favorites."""
+        _LOGGER.debug("select saving current state to favorite %d", slot)
+        await self._hatch_rest_device.async_save_favorite(slot)

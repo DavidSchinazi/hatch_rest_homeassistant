@@ -973,6 +973,76 @@ class TestPyHatchBabyRestAsync:
             await api.async_set_favorite(slot, volume=1)
 
     @pytest.mark.asyncio
+    async def test_save_favorite_writes_the_current_state(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test saving takes what the device is playing right now."""
+        sent, answer = self._favorite_answers(api)
+        api._apply_state(
+            {
+                "color": (10, 20, 30),
+                "brightness": 40,
+                "sound": PyHatchBabyRestSound.wind,
+                "volume": 50,
+                "power": True,
+                "active_favorite": None,
+            },
+            "notification",
+        )
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_save_favorite(6)
+
+        assert "PSB06" in sent
+        assert "PSC0a141e28" in sent
+        assert f"PSN{PyHatchBabyRestSound.wind:02x}" in sent
+        assert "PSV32" in sent
+
+    @pytest.mark.asyncio
+    async def test_save_favorite_leaves_the_enabled_flag_alone(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test saving into a slot does not start offering it on the device.
+
+        The captured block is an enabled slot; a disabled one must stay
+        disabled rather than quietly join the touch ring rotation.
+        """
+        disabled = bytearray(FAVORITE_BLOCK)
+        disabled[13] = 0x16
+        sent, answer = self._favorite_answers(api, bytes(disabled))
+        api._apply_state(
+            {
+                "color": (1, 2, 3),
+                "brightness": 4,
+                "sound": PyHatchBabyRestSound.rain,
+                "volume": 5,
+                "power": True,
+                "active_favorite": None,
+            },
+            "notification",
+        )
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_save_favorite(5)
+
+        assert "PSL80" in sent
+        assert "PSLc0" not in sent
+
+    @pytest.mark.asyncio
+    async def test_save_favorite_refuses_when_nothing_is_known(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a device that has not reported is not snapshotted.
+
+        There would be nothing to snapshot, and writing the empty cache would
+        blank the slot.
+        """
+        assert api.has_state is False
+
+        with pytest.raises(HatchRestConnectionError, match="nothing to save"):
+            await api.async_save_favorite(1)
+
+    @pytest.mark.asyncio
     async def test_set_favorite_stops_before_committing_if_a_command_is_lost(
         self, api: PyHatchBabyRestAsync
     ):

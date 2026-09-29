@@ -797,6 +797,27 @@ class PyHatchBabyRestAsync:
         self._notify_state_changed()
         return written
 
+    async def async_save_favorite(self, slot: int) -> dict | None:
+        """Store what the device is playing now into one of its favorites.
+
+        The enabled flag is deliberately left out, so saving into a slot the
+        device is not currently offering does not quietly start offering it.
+        """
+        if not self.has_state:
+            raise HatchRestConnectionError(
+                f"{self.address} has not said what it is playing, so there is "
+                f"nothing to save into favorite {slot}"
+            )
+
+        _LOGGER.debug("%s saving current state to favorite %d", self.address, slot)
+        return await self.async_set_favorite(
+            slot,
+            color=self.color,
+            brightness=self.brightness,
+            sound=self.sound,
+            volume=self.volume,
+        )
+
     async def _favorite_exchange(self, command: str, slot: int | None = None) -> bool:
         """Send a favorite command and wait for what it replies with.
 
