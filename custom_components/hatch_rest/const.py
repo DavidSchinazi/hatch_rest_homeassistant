@@ -57,6 +57,39 @@ FAVORITE_NAME_HEADER = 0x07
 # well under a second on a healthy link; this only bounds a lost one.
 LIST_REPLY_TIMEOUT_SECONDS = 3
 
+# A schedule comes back on CHAR_LIST as a 20 byte block sharing its header
+# with a favorite, and differing only in length:
+# [0x01] [modified LE x4] [sound] [volume] [hour] [minute] [00 x4]
+# [brightness] [B] [G] [R] [0x00] [days] [flags]
+# Colour is blue first here too.
+SCHEDULE_SLOTS = 10
+SCHEDULE_BLOCK_LENGTH = 20
+SCHEDULE_MODIFIED_INDEX = 1
+SCHEDULE_SOUND_INDEX = 5
+SCHEDULE_VOLUME_INDEX = 6
+SCHEDULE_HOUR_INDEX = 7
+SCHEDULE_MINUTE_INDEX = 8
+SCHEDULE_BRIGHTNESS_INDEX = 13
+SCHEDULE_BLUE_INDEX = 14
+SCHEDULE_GREEN_INDEX = 15
+SCHEDULE_RED_INDEX = 16
+SCHEDULE_DAYS_INDEX = 18
+SCHEDULE_FLAGS_INDEX = 19
+
+# Which bit of the flags byte means enabled is unsettled. The protocol notes
+# say 0x40 for a schedule but 0x80 for a favorite, and both are written as
+# 0xc0, which satisfies either -- so the two cannot be told apart from the
+# write side. The raw byte is reported alongside so a disabled slot settles it.
+SCHEDULE_ENABLED_MASK = 0x40
+
+# Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
+SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+# Both kinds of block share the 0x01 header, so which one a reply is can only
+# be known from what was asked for.
+BLOCK_FAVORITE = "favorite"
+BLOCK_SCHEDULE = "schedule"
+
 # The device acknowledges every command with ASCII "OK" on CHAR_LIST, sent
 # after whatever data the command asked for. That makes it the end of an
 # exchange: once it arrives, nothing further is coming for this request and

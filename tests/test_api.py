@@ -15,12 +15,14 @@ from custom_components.hatch_rest.api import (
     _assert_marker,
     _build_favorite_commands,
     _parse_favorite_block,
+    _parse_schedule_block,
     _parse_state,
 )
 from custom_components.hatch_rest.const import (
     ADVERTISEMENT_COLOR_INDEX,
     ADVERTISEMENT_POWER_INDEX,
     ADVERTISEMENT_SOUND_INDEX,
+    BLOCK_FAVORITE,
     CHAR_FEEDBACK,
     CHAR_LIST,
     CHAR_TX,
@@ -192,6 +194,94 @@ class TestParseFavoriteBlock:
 
         with pytest.raises(ValueError):
             _parse_favorite_block(payload)
+
+
+# A stored schedule as the device returns it: 07:30 on weekdays, rain at
+# volume 40, colour (253, 209, 45) at brightness 127, enabled.
+#  [01][modified LE x4][snd][vol][hr][min][00 x4][bri][B][G][R][00][days][flags]
+SCHEDULE_BLOCK = bytes.fromhex(
+    "01"  # header
+    "d2029a67"  # modified, little endian
+    "07"  # sound: rain
+    "28"  # volume 40
+    "07"  # hour
+    "1e"  # minute 30
+    "00000000"
+    "7f"  # brightness 127
+    "2dd1fd"  # colour, blue first: (253, 209, 45)
+    "00"
+    "3e"  # days: Mon-Fri
+    "40"  # flags
+)
+
+
+class TestParseScheduleBlock:
+    """Tests for the 20-byte block returned by EGB."""
+
+    def test_reads_the_time(self):
+        """Test the hour and minute come back."""
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["hour"] == 7
+        assert schedule["minute"] == 30
+
+    def test_reads_colour_as_rgb(self):
+        """Test the blue-first wire order is turned back into RGB.
+
+        Same trap as the favorite block, and the same guard against a
+        palindrome hiding it.
+        """
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["color"] == (253, 209, 45)
+        assert schedule["color"] != (45, 209, 253)
+
+    def test_reads_the_days_bitmask(self):
+        """Test bit 0 is Sunday, so 0x3e is Monday through Friday."""
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["days"] == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+        assert schedule["days_mask"] == 0x3E
+
+    def test_reads_every_day(self):
+        """Test a schedule that runs daily names all seven."""
+        payload = bytearray(SCHEDULE_BLOCK)
+        payload[18] = 0x7F
+
+        assert _parse_schedule_block(payload)["days"] == [
+            "Sun",
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+        ]
+
+    def test_reports_the_flags_byte_raw(self):
+        """Test the flags byte is exposed, not just its reading.
+
+        Which bit means enabled is unsettled -- the notes say 0x40 for a
+        schedule and 0x80 for a favorite -- so the raw byte is what will
+        settle it against a disabled slot.
+        """
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["flags"] == 0x40
+        assert schedule["enabled"] is True
+
+    def test_reads_the_remaining_fields(self):
+        """Test sound, volume and brightness come back."""
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["sound"] == PyHatchBabyRestSound.rain
+        assert schedule["volume"] == 40
+        assert schedule["brightness"] == 127
+
+    def test_rejects_a_short_payload(self):
+        """Test a truncated block is refused rather than read past."""
+        with pytest.raises(ValueError):
+            _parse_schedule_block(SCHEDULE_BLOCK[:15])
 
 
 class TestBuildFavoriteCommands:
@@ -1179,10 +1269,112 @@ class TestPyHatchBabyRestAsync:
         """
         api._commands_in_flight = 1
         api._slot_in_flight = 4
+        api._block_kind_in_flight = BLOCK_FAVORITE
 
         api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
 
         assert api.favorites[4]["volume"] == 84
+
+    @pytest.mark.asyncio
+    async def test_refresh_schedule_stores_what_came_back(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test asking for a schedule files the reply against that slot."""
+
+        async def answer(command):
+            assert command == "EGB04"
+            api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            schedule = await api.async_refresh_schedule(4)
+
+        assert schedule is not None
+        assert api.schedules[4]["hour"] == 7
+        # And it did not end up filed as a favorite.
+        assert api.favorites == {}
+
+    @pytest.mark.asyncio
+    async def test_refresh_schedules_asks_for_every_slot(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the sweep covers all ten slots, in order."""
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_schedules()
+
+        assert asked == [f"EGB{slot:02X}" for slot in range(1, 11)]
+        assert sorted(api.schedules) == list(range(1, 11))
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_reply_is_not_read_as_a_favorite(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a block of the wrong length is dropped, not misread.
+
+        Both kinds arrive under the same 0x01 header. Reading a 20 byte
+        schedule with the favorite layout would silently produce a plausible
+        favorite from the wrong bytes.
+        """
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
+        ):
+            assert await api.async_refresh_favorite(1) is None
+
+        assert api.favorites == {}
+
+    @pytest.mark.asyncio
+    async def test_a_favorite_reply_is_not_read_as_a_schedule(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the same guard the other way round."""
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
+        ):
+            assert await api.async_refresh_schedule(1) is None
+
+        assert api.schedules == {}
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_reads_favorites_and_schedules(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test one connection reads everything the device stores."""
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            if command.startswith("PGB"):
+                api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            else:
+                api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api._sweep()
+
+        assert len([c for c in asked if c.startswith("PGB")]) == 6
+        assert len([c for c in asked if c.startswith("EGB")]) == 10
+        assert len(api.favorites) == 6
+        assert len(api.schedules) == 10
 
     def test_favorite_block_with_nothing_in_flight_is_ignored(
         self, api: PyHatchBabyRestAsync

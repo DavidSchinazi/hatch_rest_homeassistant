@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 import logging
+import struct
 from time import monotonic
 
 from bleak.backends.device import BLEDevice
@@ -24,6 +25,8 @@ from bleak_retry_connector import (
 
 from .const import (
     ADVERTISEMENT_COLOR_INDEX,
+    BLOCK_FAVORITE,
+    BLOCK_SCHEDULE,
     CHAR_LIST,
     BLOCK_HEADER,
     FAVORITE_BLOCK_LENGTH,
@@ -41,6 +44,21 @@ from .const import (
     FAVORITE_RED_INDEX,
     LIST_REPLY_TIMEOUT_SECONDS,
     FAVORITE_SLOTS,
+    SCHEDULE_BLOCK_LENGTH,
+    SCHEDULE_BLUE_INDEX,
+    SCHEDULE_BRIGHTNESS_INDEX,
+    SCHEDULE_DAYS,
+    SCHEDULE_DAYS_INDEX,
+    SCHEDULE_ENABLED_MASK,
+    SCHEDULE_FLAGS_INDEX,
+    SCHEDULE_GREEN_INDEX,
+    SCHEDULE_HOUR_INDEX,
+    SCHEDULE_MINUTE_INDEX,
+    SCHEDULE_MODIFIED_INDEX,
+    SCHEDULE_RED_INDEX,
+    SCHEDULE_SLOTS,
+    SCHEDULE_SOUND_INDEX,
+    SCHEDULE_VOLUME_INDEX,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
     ADVERTISEMENT_POWER_INDEX,
@@ -162,6 +180,51 @@ def _build_favorite_commands(
     ]
 
 
+def _parse_schedule_block(data: bytes) -> dict:
+    """Parse one stored schedule out of a reply to EGB.
+
+    Colour arrives blue first, as in a favorite block. The days byte is a
+    bitmask with Sunday as bit 0.
+    """
+    if len(data) < SCHEDULE_BLOCK_LENGTH:
+        raise ValueError(f"schedule block is {len(data)} bytes, want at least 20")
+
+    _assert_marker(data, 0, BLOCK_HEADER)
+
+    sound_id = data[SCHEDULE_SOUND_INDEX]
+    try:
+        sound = PyHatchBabyRestSound(sound_id)
+    except ValueError:
+        sound = None
+
+    days = data[SCHEDULE_DAYS_INDEX]
+    flags = data[SCHEDULE_FLAGS_INDEX]
+
+    return {
+        "hour": data[SCHEDULE_HOUR_INDEX],
+        "minute": data[SCHEDULE_MINUTE_INDEX],
+        "days": [name for bit, name in enumerate(SCHEDULE_DAYS) if days & (1 << bit)],
+        "days_mask": days,
+        "color": (
+            data[SCHEDULE_RED_INDEX],
+            data[SCHEDULE_GREEN_INDEX],
+            data[SCHEDULE_BLUE_INDEX],
+        ),
+        "brightness": data[SCHEDULE_BRIGHTNESS_INDEX],
+        "sound": sound,
+        "sound_id": sound_id,
+        "volume": data[SCHEDULE_VOLUME_INDEX],
+        "enabled": bool(flags & SCHEDULE_ENABLED_MASK),
+        # Reported raw because which bit means enabled is not settled -- see
+        # SCHEDULE_ENABLED_MASK.
+        "flags": flags,
+        # Purpose unconfirmed; looks like when the slot was last written.
+        "modified_timestamp": struct.unpack_from("<I", data, SCHEDULE_MODIFIED_INDEX)[
+            0
+        ],
+    }
+
+
 class PyHatchBabyRestAsync:
     """An asynchronous interface to a Hatch Rest device using bleak."""
 
@@ -197,10 +260,16 @@ class PyHatchBabyRestAsync:
         # Stored favorites, by slot number. Populated by asking the device;
         # empty until it has answered.
         self.favorites: dict[int, dict] = {}
+        # Stored schedules, by slot number. Read only for now.
+        self.schedules: dict[int, dict] = {}
         # CHAR_LIST carries no request id, so replies are matched to requests
         # by only ever having one outstanding.
         self._list_lock = asyncio.Lock()
         self._slot_in_flight: int | None = None
+        # Which kind of block the outstanding request asked for. Both kinds
+        # arrive under the same header, so this is the only way to tell them
+        # apart.
+        self._block_kind_in_flight: str | None = None
         self._block_reply: asyncio.Future[dict] | None = None
         self._ack_reply: asyncio.Future[None] | None = None
         self._sweep_task: asyncio.Task | None = None
@@ -275,20 +344,7 @@ class PyHatchBabyRestAsync:
             return
 
         if data[0] == BLOCK_HEADER:
-            try:
-                favorite = _parse_favorite_block(data)
-            except (IndexError, ValueError) as e:
-                _LOGGER.debug("Ignoring unparseable favorite %s -- %r", data.hex(), e)
-                return
-
-            slot = self._slot_in_flight
-            if slot is None:
-                _LOGGER.debug("Ignoring favorite block with nothing in flight")
-                return
-
-            _LOGGER.debug("%s favorite %d: %s", self.address, slot, favorite)
-            self.favorites.setdefault(slot, {}).update(favorite)
-            self._resolve(self._block_reply, favorite)
+            self._handle_block(data)
 
         elif data[0] == FAVORITE_NAME_HEADER:
             name = self._parse_favorite_name(data)
@@ -305,6 +361,53 @@ class PyHatchBabyRestAsync:
 
         else:
             _LOGGER.debug("%s unhandled reply %s", self.address, data.hex())
+
+    def _handle_block(self, data: bytearray) -> None:
+        """File a favorite or schedule block against the slot it answers.
+
+        Favorites and schedules share the 0x01 header and differ only in
+        length, so what was asked for is what decides which this is. Checking
+        the length as well means a reply that does not match is dropped rather
+        than read as the wrong kind of thing.
+        """
+        kind = self._block_kind_in_flight
+        slot = self._slot_in_flight
+        if kind is None or slot is None:
+            _LOGGER.debug("Ignoring block with nothing in flight")
+            return
+
+        if kind == BLOCK_FAVORITE:
+            expected, parse, store = (
+                FAVORITE_BLOCK_LENGTH,
+                _parse_favorite_block,
+                self.favorites,
+            )
+        else:
+            expected, parse, store = (
+                SCHEDULE_BLOCK_LENGTH,
+                _parse_schedule_block,
+                self.schedules,
+            )
+
+        if len(data) != expected:
+            _LOGGER.debug(
+                "Ignoring %d byte reply to a %s request wanting %d -- %s",
+                len(data),
+                kind,
+                expected,
+                data.hex(),
+            )
+            return
+
+        try:
+            parsed = parse(data)
+        except (IndexError, ValueError) as e:
+            _LOGGER.debug("Ignoring unparseable %s %s -- %r", kind, data.hex(), e)
+            return
+
+        _LOGGER.debug("%s %s %d: %s", self.address, kind, slot, parsed)
+        store.setdefault(slot, {}).update(parsed)
+        self._resolve(self._block_reply, parsed)
 
     @staticmethod
     def _parse_favorite_name(data: bytes) -> str:
@@ -692,7 +795,12 @@ class PyHatchBabyRestAsync:
         if self._sweep_task is not None and not self._sweep_task.done():
             return
 
-        self._sweep_task = asyncio.create_task(self.async_refresh_favorites())
+        self._sweep_task = asyncio.create_task(self._sweep())
+
+    async def _sweep(self) -> None:
+        """Read everything the device stores."""
+        await self.async_refresh_favorites()
+        await self.async_refresh_schedules()
 
     async def async_refresh_favorites(self) -> None:
         """Ask the device for every stored favorite."""
@@ -701,9 +809,24 @@ class PyHatchBabyRestAsync:
 
     async def async_refresh_favorite(self, slot: int) -> dict | None:
         """Ask the device for one stored favorite."""
-        if not await self._list_exchange(f"PGB{slot:02X}", slot=slot):
+        if not await self._list_exchange(
+            f"PGB{slot:02X}", slot=slot, kind=BLOCK_FAVORITE
+        ):
             return None
         return self.favorites.get(slot)
+
+    async def async_refresh_schedules(self) -> None:
+        """Ask the device for every stored schedule."""
+        for slot in range(1, SCHEDULE_SLOTS + 1):
+            await self.async_refresh_schedule(slot)
+
+    async def async_refresh_schedule(self, slot: int) -> dict | None:
+        """Ask the device for one stored schedule."""
+        if not await self._list_exchange(
+            f"EGB{slot:02X}", slot=slot, kind=BLOCK_SCHEDULE
+        ):
+            return None
+        return self.schedules.get(slot)
 
     async def async_set_favorite(
         self,
@@ -824,8 +947,10 @@ class PyHatchBabyRestAsync:
 
         return written
 
-    async def _list_exchange(self, command: str, slot: int | None = None) -> bool:
-        """Send a favorite command and wait for what it replies with.
+    async def _list_exchange(
+        self, command: str, slot: int | None = None, kind: str | None = None
+    ) -> bool:
+        """Send a command and wait for what it replies with.
 
         Returns whether the device answered. What it answered with, when it
         is a slot's contents, lands in self.favorites rather than here: a
@@ -844,6 +969,7 @@ class PyHatchBabyRestAsync:
         async with self._list_lock:
             loop = asyncio.get_running_loop()
             self._slot_in_flight = slot
+            self._block_kind_in_flight = kind
             self._block_reply = loop.create_future()
             self._ack_reply = loop.create_future()
 
