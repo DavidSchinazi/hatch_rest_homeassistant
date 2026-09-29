@@ -990,7 +990,10 @@ class TestPyHatchBabyRestAsync:
             "notification",
         )
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "set_active_favorite", new_callable=AsyncMock),
+        ):
             await api.async_save_favorite(6)
 
         assert "PSB06" in sent
@@ -1022,11 +1025,87 @@ class TestPyHatchBabyRestAsync:
             "notification",
         )
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "set_active_favorite", new_callable=AsyncMock),
+        ):
             await api.async_save_favorite(5)
 
         assert "PSL80" in sent
         assert "PSLc0" not in sent
+
+    @pytest.mark.asyncio
+    async def test_save_favorite_selects_what_it_just_stored(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test saving leaves that favorite showing as the one playing.
+
+        The device does not treat storing a favorite as selecting it, so it
+        goes on reporting whichever was playing before -- or none, if the
+        state had been set by hand, which is exactly the case where someone
+        has just built something worth saving.
+        """
+        _, answer = self._favorite_answers(api)
+        api._apply_state(
+            {
+                "color": (1, 2, 3),
+                "brightness": 4,
+                "sound": PyHatchBabyRestSound.rain,
+                "volume": 5,
+                "power": True,
+                "active_favorite": None,
+            },
+            "notification",
+        )
+
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send,
+        ):
+            await api.async_save_favorite(4)
+
+        mock_send.assert_awaited_once_with("SP04")
+        assert api.active_favorite == 4
+
+    @pytest.mark.asyncio
+    async def test_save_favorite_selects_only_after_storing(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a save that failed does not select the slot anyway.
+
+        Selecting one that was not written would play the old contents while
+        claiming the new ones had been stored.
+        """
+        api._apply_state(
+            {
+                "color": (1, 2, 3),
+                "brightness": 4,
+                "sound": PyHatchBabyRestSound.rain,
+                "volume": 5,
+                "power": True,
+                "active_favorite": None,
+            },
+            "notification",
+        )
+
+        async def never_answer(command):
+            return
+
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=never_answer),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
+            ),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
+            ),
+            patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send,
+            pytest.raises(HatchRestConnectionError),
+        ):
+            await api.async_save_favorite(4)
+
+        mock_send.assert_not_awaited()
+        assert api.active_favorite is None
 
     @pytest.mark.asyncio
     async def test_save_favorite_refuses_when_nothing_is_known(

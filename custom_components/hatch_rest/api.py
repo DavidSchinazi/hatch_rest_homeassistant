@@ -810,13 +810,22 @@ class PyHatchBabyRestAsync:
             )
 
         _LOGGER.debug("%s saving current state to favorite %d", self.address, slot)
-        return await self.async_set_favorite(
+        written = await self.async_set_favorite(
             slot,
             color=self.color,
             brightness=self.brightness,
             sound=self.sound,
             volume=self.volume,
         )
+
+        # Storing a favorite does not select it: the device goes on reporting
+        # whichever was playing before, or none at all if the state had been
+        # changed by hand. What is playing now is this favorite by definition,
+        # having just been copied from it, so say so -- and say it by telling
+        # the device rather than by assuming, so the two cannot drift apart.
+        await self.set_active_favorite(slot)
+
+        return written
 
     async def _favorite_exchange(self, command: str, slot: int | None = None) -> bool:
         """Send a favorite command and wait for what it replies with.
