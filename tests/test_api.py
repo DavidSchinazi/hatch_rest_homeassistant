@@ -13,6 +13,7 @@ from custom_components.hatch_rest.api import (
     HatchRestConnectionError,
     PyHatchBabyRestAsync,
     _assert_marker,
+    _parse_favorite_block,
     _parse_state,
 )
 from custom_components.hatch_rest.const import (
@@ -20,6 +21,7 @@ from custom_components.hatch_rest.const import (
     ADVERTISEMENT_POWER_INDEX,
     ADVERTISEMENT_SOUND_INDEX,
     CHAR_FEEDBACK,
+    CHAR_LIST,
     CHAR_TX,
     FEEDBACK_COLOR_INDEX,
     FEEDBACK_POWER_INDEX,
@@ -125,6 +127,72 @@ class TestParseState:
             )
 
 
+# A stored favorite as the device returns it: ocean at volume 84, colour
+# (253, 209, 45) at brightness 127, enabled. Colour is blue first on the wire.
+FAVORITE_BLOCK = bytes.fromhex("0105540000000000007f2dd1fd9603")
+
+
+class TestParseFavoriteBlock:
+    """Tests for the 15-byte block returned by PGB."""
+
+    def test_reads_colour_as_rgb(self):
+        """Test the blue-first wire order is turned back into RGB.
+
+        The command that writes a favorite takes red first, so getting this
+        backwards would swap red and blue with nothing to show for it.
+        """
+        favorite = _parse_favorite_block(FAVORITE_BLOCK)
+
+        assert favorite["color"] == (253, 209, 45)
+        # Guard against a palindrome hiding the bug.
+        assert favorite["color"] != (45, 209, 253)
+
+    def test_reads_the_remaining_fields(self):
+        """Test sound, volume and brightness come back."""
+        favorite = _parse_favorite_block(FAVORITE_BLOCK)
+
+        assert favorite["sound"] == PyHatchBabyRestSound.ocean
+        assert favorite["sound_id"] == PyHatchBabyRestSound.ocean
+        assert favorite["volume"] == 84
+        assert favorite["brightness"] == 127
+        assert favorite["enabled"] is True
+
+    def test_reads_a_disabled_slot(self):
+        """Test the enabled bit of the flags byte."""
+        payload = bytearray(FAVORITE_BLOCK)
+        payload[13] = 0x16
+
+        assert _parse_favorite_block(payload)["enabled"] is False
+
+    def test_keeps_an_unknown_sound_id(self):
+        """Test a sound with no name is still usable.
+
+        The sound numbering has gaps, so a favorite can hold one this
+        integration cannot name. The raw id is what gets written back, so
+        losing it would corrupt the slot on the next write.
+        """
+        payload = bytearray(FAVORITE_BLOCK)
+        payload[1] = 8  # absent from PyHatchBabyRestSound
+
+        favorite = _parse_favorite_block(payload)
+
+        assert favorite["sound"] is None
+        assert favorite["sound_id"] == 8
+
+    def test_rejects_a_short_payload(self):
+        """Test a truncated block is refused rather than read past."""
+        with pytest.raises(ValueError):
+            _parse_favorite_block(FAVORITE_BLOCK[:10])
+
+    def test_rejects_a_payload_without_the_header(self):
+        """Test a block that is not a favorite is refused."""
+        payload = bytearray(FAVORITE_BLOCK)
+        payload[0] = 0x07
+
+        with pytest.raises(ValueError):
+            _parse_favorite_block(payload)
+
+
 class TestPyHatchBabyRestAsync:
     """Tests for PyHatchBabyRestAsync."""
 
@@ -188,7 +256,40 @@ class TestPyHatchBabyRestAsync:
         ):
             await api._client_connect()
 
-        assert mock_client.start_notify.await_args.args[0] == CHAR_FEEDBACK
+        subscribed = [call.args[0] for call in mock_client.start_notify.await_args_list]
+        assert CHAR_FEEDBACK in subscribed
+        # Favorite replies arrive on their own characteristic.
+        assert CHAR_LIST in subscribed
+
+    @pytest.mark.asyncio
+    async def test_connect_survives_a_device_without_favorites(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test failing to subscribe for favorites still leaves state working.
+
+        The two subscriptions are independent: a device that will not talk
+        about favorites must still report what it is doing.
+        """
+        mock_client = AsyncMock()
+        mock_client.is_connected = True
+        mock_client.services = MagicMock()
+
+        async def start_notify(char, _handler):
+            if char == CHAR_LIST:
+                raise BleakConnectionError("no such characteristic")
+
+        mock_client.start_notify = AsyncMock(side_effect=start_notify)
+
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            await api._client_connect()
+
+        assert api._client is mock_client
+        subscribed = [call.args[0] for call in mock_client.start_notify.await_args_list]
+        assert CHAR_FEEDBACK in subscribed
 
     @pytest.mark.asyncio
     async def test_connect_survives_a_device_that_cannot_notify(
@@ -609,6 +710,135 @@ class TestPyHatchBabyRestAsync:
             data=bytearray("SI01", "utf-8"),
             response=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_refresh_favorite_stores_what_came_back(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test asking for a slot files the reply against that slot."""
+
+        async def answer(command):
+            assert command == "PGB03"
+            api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.FAVORITE_NAME_GRACE_SECONDS", 0.01),
+        ):
+            favorite = await api.async_refresh_favorite(3)
+
+        assert favorite is not None
+        assert favorite["color"] == (253, 209, 45)
+        assert api.favorites[3]["volume"] == 84
+
+    @pytest.mark.asyncio
+    async def test_refresh_favorite_records_a_name(self, api: PyHatchBabyRestAsync):
+        """Test the name notification that follows a block is kept."""
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            api._list_notification_received(None, bytearray(b"\x07\x00Bedtime\x00"))
+
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
+            await api.async_refresh_favorite(2)
+
+        assert api.favorites[2]["name"] == "Bedtime"
+
+    @pytest.mark.asyncio
+    async def test_refresh_favorite_gives_up_when_nothing_answers(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a slot that never replies does not wait forever."""
+        with (
+            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
+            ),
+        ):
+            assert await api.async_refresh_favorite(1) is None
+
+        assert api.favorites == {}
+
+    @pytest.mark.asyncio
+    async def test_refresh_favorites_asks_for_every_slot(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the sweep covers all six slots, in order."""
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+
+        with (
+            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.FAVORITE_NAME_GRACE_SECONDS", 0.01),
+        ):
+            await api.async_refresh_favorites()
+
+        assert asked == [f"PGB{slot:02X}" for slot in range(1, 7)]
+        assert sorted(api.favorites) == [1, 2, 3, 4, 5, 6]
+
+    def test_favorite_reply_is_read_while_a_command_is_in_flight(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test favorite replies are not dropped by the state-update gate.
+
+        That gate stops a stale reading of the device reverting an optimistic
+        update. A favorite reply is an answer to a question we asked, so
+        dropping it would hang the caller waiting for it.
+        """
+        api._commands_in_flight = 1
+        api._favorite_slot_in_flight = 4
+
+        api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+
+        assert api.favorites[4]["volume"] == 84
+
+    def test_favorite_block_with_nothing_in_flight_is_ignored(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test an unsolicited block is not filed against a guessed slot."""
+        api._favorite_slot_in_flight = None
+
+        api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+
+        assert api.favorites == {}
+
+    @pytest.mark.asyncio
+    async def test_favorite_command_does_not_open_the_settle_window(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test reading a favorite does not suppress real state updates.
+
+        Commands hold off advertisements because they change what the device
+        is doing. Reading a stored favorite does not, so blinding ourselves
+        for two seconds either side of it would cost updates for nothing.
+        """
+        mock_client = AsyncMock()
+        api._client = mock_client
+        api._settle_until = 0.0
+
+        with patch.object(api, "_client_connect", new_callable=AsyncMock):
+            await api._write_favorite_command("PGB01")
+
+        mock_client.write_gatt_char.assert_awaited_once()
+        assert api._settle_until == 0.0
+        assert api._commands_in_flight == 0
+        assert api._active_operations == 0
+
+    def test_no_sweep_when_the_device_cannot_report_favorites(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a device that refused the subscription is not swept.
+
+        Every slot would time out, six times over, on every reconnect.
+        """
+        api._favorites_supported = False
+
+        api._start_favorite_sweep()
+
+        assert api._favorite_sweep_task is None
 
     def test_has_state_and_advertisement_age(self, api: PyHatchBabyRestAsync):
         """Test state and freshness are only known after a parse."""

@@ -17,6 +17,9 @@ DEFAULT_ON_BRIGHTNESS = 255
 COLOR_GRADIENT = (254, 254, 254)  # setting this color turns on Gradient mode
 CHAR_TX = "02240002-5efd-47eb-9c1a-de53f7a2b232"
 CHAR_FEEDBACK = "02260002-5efd-47eb-9c1a-de53f7a2b232"
+# Replies to the favorite commands arrive here rather than on the feedback
+# characteristic. Notify only -- it cannot be read.
+CHAR_LIST = "02240003-5efd-47eb-9c1a-de53f7a2b232"
 BT_MANUFACTURER_ID = 1076
 
 # Markers delimiting the blocks of a state payload.
@@ -31,6 +34,33 @@ POWER_OFF_MASK = 0xC0  # bits set in the power byte while the device is off
 # thing. Anything outside the slot range is treated as no selection.
 FAVORITE_MASK = 0x3F
 FAVORITE_SLOTS = 6
+
+# A stored favorite comes back on CHAR_LIST as a 15 byte block:
+# [0x01] [sound] [volume] [00 x6] [brightness] [B] [G] [R] [flags] [0x03]
+# Note the colour arrives blue first, while the command that writes a favorite
+# takes it red first. The two are not symmetric.
+FAVORITE_BLOCK_LENGTH = 15
+FAVORITE_BLOCK_HEADER = 0x01
+FAVORITE_SOUND_INDEX = 1
+FAVORITE_VOLUME_INDEX = 2
+FAVORITE_BRIGHTNESS_INDEX = 9
+FAVORITE_BLUE_INDEX = 10
+FAVORITE_GREEN_INDEX = 11
+FAVORITE_RED_INDEX = 12
+FAVORITE_FLAGS_INDEX = 13
+FAVORITE_ENABLED_MASK = 0x80
+
+# Names arrive as their own notification, headed 0x07 and followed by ASCII.
+FAVORITE_NAME_HEADER = 0x07
+
+# How long to wait for a reply to a favorite command. Replies come back in
+# well under a second on a healthy link; this only bounds a lost one.
+FAVORITE_REPLY_TIMEOUT_SECONDS = 3
+
+# A slot's name follows its contents as a separate notification, so the reply
+# is held open briefly afterwards. Without this the name could arrive after
+# the next slot has been asked for and be filed against the wrong one.
+FAVORITE_NAME_GRACE_SECONDS = 0.5
 
 # Offsets of those markers within the feedback characteristic:
 # T .. .. .. .. C r g b br S sn vol P pwr
