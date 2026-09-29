@@ -1,4 +1,4 @@
-"""Hatch Rest schedule and timer sensors."""
+"""Hatch Rest program and timer sensors."""
 
 import logging
 from typing import Any
@@ -9,7 +9,7 @@ from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import SCHEDULE_SLOTS
+from .const import PROGRAM_SLOTS
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,13 +20,13 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the schedule sensors and the sleep timer."""
+    """Set up the program sensors and the sleep timer."""
     coordinator = config_entry.runtime_data
     async_add_entities(
         [
             *(
-                HatchBabyRestScheduleSensor(coordinator, slot)
-                for slot in range(1, SCHEDULE_SLOTS + 1)
+                HatchBabyRestProgramSensor(coordinator, slot)
+                for slot in range(1, PROGRAM_SLOTS + 1)
             ),
             HatchBabyRestTimerSensor(coordinator),
         ],
@@ -62,10 +62,10 @@ class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: i
         return self._hatch_rest_device.timer_remaining
 
 
-class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """What one of the device's stored schedules is set to.
+class HatchBabyRestProgramSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """What one of the device's stored programs is set to.
 
-    Read only. The commands that write a schedule's time, sound, colour or
+    Read only. The commands that write a program's time, sound, colour or
     days are not documented anywhere we can check, so this reports what the
     device holds and changes nothing.
     """
@@ -78,73 +78,73 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
         """Initialize the sensor for one slot."""
         super().__init__(coordinator)
         self._slot = slot
-        self._attr_unique_id = f"{coordinator.unique_id}_schedule_{slot}"
+        self._attr_unique_id = f"{coordinator.unique_id}_program_{slot}"
 
     @property
     def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Return the name of the entity."""
         if self._hatch_rest_device.name:
-            return f"{self._hatch_rest_device.name.title()} Schedule {self._slot}"
+            return f"{self._hatch_rest_device.name.title()} Program {self._slot}"
         return None
 
     @property
-    def _schedule(self) -> dict | None:
+    def _program(self) -> dict | None:
         """Return this slot's contents, if its block has been read.
 
         A slot can hold nothing but a name. Names arrive as their own
         notification, so one can land before the block it belongs to, or
         without it at all if the block never parses.
         """
-        schedule = self._hatch_rest_device.schedules.get(self._slot)
-        if schedule is None or "time" not in schedule:
+        program = self._hatch_rest_device.programs.get(self._slot)
+        if program is None or "time" not in program:
             return None
-        return schedule
+        return program
 
     @property
     def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the name the schedule was given on the device.
+        """Return the name the program was given on the device.
 
-        The name says what a schedule is for in a way its time does not, and
-        the entity is already called "Schedule 3", which says neither. Six of
+        The name says what a program is for in a way its time does not, and
+        the entity is already called "Program 3", which says neither. Six of
         forty slots here have no name; those fall back to the time rather
         than to a placeholder, since it is at least real.
 
         None until the slot has been read, which is not the same as a slot
         with nothing in it.
         """
-        schedule = self._schedule
-        if schedule is None:
+        program = self._program
+        if program is None:
             return None
-        return schedule.get("name") or schedule["time"]
+        return program.get("name") or program["time"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the rest of what the schedule holds."""
-        schedule = self._schedule
-        if schedule is None:
+        """Return the rest of what the program holds."""
+        program = self._program
+        if program is None:
             return {}
 
         return {
-            "name": schedule.get("name"),
-            "time": schedule["time"],
-            "days": schedule["days"],
-            "duration_seconds": schedule["duration_seconds"],
+            "name": program.get("name"),
+            "time": program["time"],
+            "days": program["days"],
+            "duration_seconds": program["duration_seconds"],
             # Kept because the layout here was worked out from real slots
             # against two published sources that had it wrong, and the bytes
             # nothing has accounted for are still in it.
-            "raw": schedule["raw"],
-            "color": schedule["color"],
-            "brightness": schedule["brightness"],
+            "raw": program["raw"],
+            "color": program["color"],
+            "brightness": program["brightness"],
             "sound": (
-                schedule["sound"].name
-                if schedule["sound"] is not None
-                else schedule["sound_id"]
+                program["sound"].name
+                if program["sound"] is not None
+                else program["sound_id"]
             ),
-            "volume": schedule["volume"],
-            "enabled": schedule["enabled"],
-            "toddler_lock": schedule["toddler_lock"],
+            "volume": program["volume"],
+            "enabled": program["enabled"],
+            "toddler_lock": program["toddler_lock"],
             # Reported because which bit means enabled is still unsettled,
             # and because a disabled slot is what will settle it.
-            "flags": schedule["flags"],
-            "start_timestamp": schedule["start_timestamp"],
+            "flags": program["flags"],
+            "start_timestamp": program["start_timestamp"],
         }

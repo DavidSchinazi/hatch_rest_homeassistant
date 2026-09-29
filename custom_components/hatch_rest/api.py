@@ -28,7 +28,7 @@ from .const import (
     ADVERTISEMENT_COLOR_INDEX,
     CLOCK_SYNC_EARLIEST,
     BLOCK_FAVORITE,
-    BLOCK_SCHEDULE,
+    BLOCK_PROGRAM,
     CHAR_LIST,
     BLOCK_HEADER,
     FAVORITE_BLOCK_LENGTH,
@@ -45,21 +45,21 @@ from .const import (
     FAVORITE_RED_INDEX,
     LIST_REPLY_TIMEOUT_SECONDS,
     FAVORITE_SLOTS,
-    SCHEDULE_BLOCK_LENGTH,
-    SCHEDULE_BLUE_INDEX,
-    SCHEDULE_BRIGHTNESS_INDEX,
-    SCHEDULE_DAYS,
-    SCHEDULE_DAYS_INDEX,
-    SCHEDULE_ENABLED_MASK,
-    SCHEDULE_FLAGS_INDEX,
-    SCHEDULE_GREEN_INDEX,
-    SCHEDULE_LOCK_INDEX,
-    SCHEDULE_DURATION_INDEX,
-    SCHEDULE_RED_INDEX,
-    SCHEDULE_SLOTS,
-    SCHEDULE_SOUND_INDEX,
-    SCHEDULE_START_INDEX,
-    SCHEDULE_VOLUME_INDEX,
+    PROGRAM_BLOCK_LENGTH,
+    PROGRAM_BLUE_INDEX,
+    PROGRAM_BRIGHTNESS_INDEX,
+    PROGRAM_DAYS,
+    PROGRAM_DAYS_INDEX,
+    PROGRAM_ENABLED_MASK,
+    PROGRAM_FLAGS_INDEX,
+    PROGRAM_GREEN_INDEX,
+    PROGRAM_LOCK_INDEX,
+    PROGRAM_DURATION_INDEX,
+    PROGRAM_RED_INDEX,
+    PROGRAM_SLOTS,
+    PROGRAM_SOUND_INDEX,
+    PROGRAM_START_INDEX,
+    PROGRAM_VOLUME_INDEX,
     TIMER_NONE,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
@@ -190,53 +190,53 @@ def _parse_hex_reply(text: str | None) -> int | None:
         return None
 
 
-def _parse_schedule_block(data: bytes) -> dict:
-    """Parse one stored schedule out of a reply to EGB.
+def _parse_program_block(data: bytes) -> dict:
+    """Parse one stored program out of a reply to EGB.
 
     Colour arrives blue first, as in a favorite block. The days byte is a
     bitmask with Sunday as bit 0.
     """
-    if len(data) < SCHEDULE_BLOCK_LENGTH:
-        raise ValueError(f"schedule block is {len(data)} bytes, want at least 20")
+    if len(data) < PROGRAM_BLOCK_LENGTH:
+        raise ValueError(f"program block is {len(data)} bytes, want at least 20")
 
     _assert_marker(data, 0, BLOCK_HEADER)
 
-    sound_id = data[SCHEDULE_SOUND_INDEX]
+    sound_id = data[PROGRAM_SOUND_INDEX]
     try:
         sound = PyHatchBabyRestSound(sound_id)
     except ValueError:
         sound = None
 
-    days = data[SCHEDULE_DAYS_INDEX]
-    flags = data[SCHEDULE_FLAGS_INDEX]
+    days = data[PROGRAM_DAYS_INDEX]
+    flags = data[PROGRAM_FLAGS_INDEX]
 
     # The stored value is a whole unix timestamp, but only its time of day
     # matters, and only read as UTC -- the device writes local wall clock into
     # it without a zone. Taking the remainder rather than building a datetime
     # keeps any timezone out of it, daylight saving included.
-    start = struct.unpack_from("<I", data, SCHEDULE_START_INDEX)[0]
+    start = struct.unpack_from("<I", data, PROGRAM_START_INDEX)[0]
     hour, minute = divmod(start % 86400 // 60, 60)
 
     return {
         "time": f"{hour:02d}:{minute:02d}",
-        "duration_seconds": struct.unpack_from("<H", data, SCHEDULE_DURATION_INDEX)[0],
-        "days": [name for bit, name in enumerate(SCHEDULE_DAYS) if days & (1 << bit)],
+        "duration_seconds": struct.unpack_from("<H", data, PROGRAM_DURATION_INDEX)[0],
+        "days": [name for bit, name in enumerate(PROGRAM_DAYS) if days & (1 << bit)],
         "days_mask": days,
         "color": (
-            data[SCHEDULE_RED_INDEX],
-            data[SCHEDULE_GREEN_INDEX],
-            data[SCHEDULE_BLUE_INDEX],
+            data[PROGRAM_RED_INDEX],
+            data[PROGRAM_GREEN_INDEX],
+            data[PROGRAM_BLUE_INDEX],
         ),
-        "brightness": data[SCHEDULE_BRIGHTNESS_INDEX],
+        "brightness": data[PROGRAM_BRIGHTNESS_INDEX],
         "sound": sound,
         "sound_id": sound_id,
-        "volume": data[SCHEDULE_VOLUME_INDEX],
-        "enabled": bool(flags & SCHEDULE_ENABLED_MASK),
+        "volume": data[PROGRAM_VOLUME_INDEX],
+        "enabled": bool(flags & PROGRAM_ENABLED_MASK),
         "flags": flags,
         # The app calls this Toddler Lock. It reads as a switch, but holds
         # 0x01ff rather than 1, so only whether it is set is reported.
-        "toddler_lock": bool(struct.unpack_from("<H", data, SCHEDULE_LOCK_INDEX)[0]),
-        # The whole start value. Its time of day is when the schedule runs,
+        "toddler_lock": bool(struct.unpack_from("<H", data, PROGRAM_LOCK_INDEX)[0]),
+        # The whole start value. Its time of day is when the program runs,
         # which is confirmed; what the date half is for is not. It sits years
         # in the past and moved forward by exactly one day when a slot was
         # edited, which is not what a last-written date would do.
@@ -280,8 +280,8 @@ class PyHatchBabyRestAsync:
         # Stored favorites, by slot number. Populated by asking the device;
         # empty until it has answered.
         self.favorites: dict[int, dict] = {}
-        # Stored schedules, by slot number. Read only for now.
-        self.schedules: dict[int, dict] = {}
+        # Stored programs, by slot number. Read only for now.
+        self.programs: dict[int, dict] = {}
 
         # The sleep timer, as the device last reported it. Read once per
         # connection and counted down locally from there, rather than asked
@@ -387,7 +387,7 @@ class PyHatchBabyRestAsync:
             store = (
                 self.favorites
                 if self._block_kind_in_flight == BLOCK_FAVORITE
-                else self.schedules
+                else self.programs
             )
             slot = self._slot_in_flight
             if slot is None:
@@ -414,9 +414,9 @@ class PyHatchBabyRestAsync:
             _LOGGER.debug("%s unhandled reply %s", self.address, data.hex())
 
     def _handle_block(self, data: bytearray) -> None:
-        """File a favorite or schedule block against the slot it answers.
+        """File a favorite or program block against the slot it answers.
 
-        Favorites and schedules share the 0x01 header and differ only in
+        Favorites and programs share the 0x01 header and differ only in
         length, so what was asked for is what decides which this is. Checking
         the length as well means a reply that does not match is dropped rather
         than read as the wrong kind of thing.
@@ -435,9 +435,9 @@ class PyHatchBabyRestAsync:
             )
         else:
             expected, parse, store = (
-                SCHEDULE_BLOCK_LENGTH,
-                _parse_schedule_block,
-                self.schedules,
+                PROGRAM_BLOCK_LENGTH,
+                _parse_program_block,
+                self.programs,
             )
 
         if len(data) != expected:
@@ -458,7 +458,7 @@ class PyHatchBabyRestAsync:
 
         _LOGGER.debug("%s %s %d: %s", self.address, kind, slot, parsed)
         store.setdefault(slot, {}).update(parsed)
-        # Favorites and schedules do not go through _apply_state, which is
+        # Favorites and programs do not go through _apply_state, which is
         # what usually publishes, and that only fires when the device's own
         # state changes. An idle Hatch can go minutes without one, so without
         # this the entities showing these sit at unknown long after the
@@ -471,7 +471,7 @@ class PyHatchBabyRestAsync:
         """Pull a slot's name out of a notification, if that is what it is.
 
         The leading byte varies -- 0x04, 0x05 and 0x85 have all turned up for
-        schedules, against the 0x07 the notes give for favorites -- so what
+        programs, against the 0x07 the notes give for favorites -- so what
         marks one of these is the printable text after it rather than the
         byte itself.
         """
@@ -864,7 +864,7 @@ class PyHatchBabyRestAsync:
         """Set the clock if it is due, then read everything the device stores."""
         await self.async_sync_clock()
         await self.async_refresh_favorites()
-        await self.async_refresh_schedules()
+        await self.async_refresh_programs()
         await self.async_refresh_timer()
 
     async def async_refresh_favorites(self) -> None:
@@ -880,18 +880,18 @@ class PyHatchBabyRestAsync:
             return None
         return self.favorites.get(slot)
 
-    async def async_refresh_schedules(self) -> None:
-        """Ask the device for every stored schedule."""
-        for slot in range(1, SCHEDULE_SLOTS + 1):
-            await self.async_refresh_schedule(slot)
+    async def async_refresh_programs(self) -> None:
+        """Ask the device for every stored program."""
+        for slot in range(1, PROGRAM_SLOTS + 1):
+            await self.async_refresh_program(slot)
 
-    async def async_refresh_schedule(self, slot: int) -> dict | None:
-        """Ask the device for one stored schedule."""
+    async def async_refresh_program(self, slot: int) -> dict | None:
+        """Ask the device for one stored program."""
         if not await self._list_exchange(
-            f"EGB{slot:02X}", slot=slot, kind=BLOCK_SCHEDULE
+            f"EGB{slot:02X}", slot=slot, kind=BLOCK_PROGRAM
         ):
             return None
-        return self.schedules.get(slot)
+        return self.programs.get(slot)
 
     async def async_set_favorite(
         self,
@@ -1015,11 +1015,11 @@ class PyHatchBabyRestAsync:
     async def async_sync_clock(self) -> None:
         """Tell the device what time it is, if it has not been told today.
 
-        Its schedules run off its own clock and nothing else sets it, so
+        Its programs run off its own clock and nothing else sets it, so
         without this they drift away from the times they are set to.
 
         The device is told the local wall clock with no zone, which is how it
-        stores a schedule's start time too. There is no command to read the
+        stores a program's start time too. There is no command to read the
         clock back, so the acknowledgement is the only confirmation there is.
         """
         # Local wall clock is exactly what is wanted here: the device keeps no

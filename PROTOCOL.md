@@ -246,7 +246,7 @@ Two things we established that the sources do not mention:
 
 wmbest2's implementation parses a notification headed `0x07` followed by ASCII as a slot's name.
 We have never seen one: 24 slot reads across four devices produced zero name notifications. In
-that fork's own code the parsed name is filed against schedules rather than favorites, so it may
+that fork's own code the parsed name is filed against programs rather than favorites, so it may
 not be wired for favorites at all.
 
 We keep the parsing in case some device sends it, and fall back to numbering the slots.
@@ -255,10 +255,10 @@ We keep the parsing in case some device sends it, and fall back to numbering the
 
 `ST{YYYYMMDDHHmmss}U`, followed by the usual `OK`. **Confirmed** only as far as the
 acknowledgement goes: there is no command to read the clock back, so nothing can check what the
-device did with it beyond watching whether schedules fire on time.
+device did with it beyond watching whether programs fire on time.
 
 The device is told the **local wall clock with no zone**, which is the same convention its
-schedules use for their start times. Converting to UTC first would be converting to nothing.
+programs use for their start times. Converting to UTC first would be converting to nothing.
 
 We send it at most once a day, when a device connects, and never between midnight and 02:30. In
 that window the local clock is ambiguous on the day the clocks go back and absent on the day they
@@ -270,16 +270,16 @@ where the idea came from.
 Present in the published sources, untouched here, and therefore entirely **Inherited**:
 
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
-- Writing schedules — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
-  schedule's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
+- Writing programs — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
+  program's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
 
-## Schedules
+## Programs
 
 **Confirmed**: ten slots, read with `EGB{NN}` (`01`–`0A`), replying with a 20-byte block on
 `CHAR_LIST`. All forty slots across four devices read without a timeout.
 
 The block shares its `0x01` header with a favorite and differs only in length, 20 against 15.
-A schedule fed to the favorite parser does not fail — it returns a plausible favorite assembled
+A program fed to the favorite parser does not fail — it returns a plausible favorite assembled
 from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
 
 ```
@@ -289,7 +289,7 @@ from the wrong bytes — so the only safe way to tell them apart is which one wa
 
 **Confirmed**: sound, volume, brightness, colour (blue first, as in a favorite), and days. Days is
 a bitmask with bit 0 = Sunday; real slots read 0x3e for weekdays, 0x60 for the weekend, 0x00 for
-an empty slot. Two things carried it: an "Ok to Wake" schedule decodes green, and a schedule its
+an empty slot. Two things carried it: an "Ok to Wake" program decodes green, and a program its
 owner had named "Tuesday Morning" has its bitmask set to exactly 0x04.
 
 ### The start time and duration — **Contradicted**
@@ -299,7 +299,7 @@ Both sources call bytes 1-4 a modified timestamp and put the hour at byte 7 and 
 46:14, which is simply the unset value.
 
 Bytes 1-4 are the **start time**: a unix timestamp whose time of day, read **as UTC**, is the local
-time the schedule runs at. The device writes local wall clock into a timestamp-shaped field with no
+time the program runs at. The device writes local wall clock into a timestamp-shaped field with no
 zone, so reading it as UTC rather than converting is what makes it right — and what makes it immune
 to daylight saving. The date half is when the slot was last written.
 
@@ -326,7 +326,7 @@ all; both treat bytes 9-12 as padding.
 
 Found by diffing all forty slots across a session in which the owner turned the toggle on in the
 Hatch app. Exactly one slot changed, and apart from the date half of the start value the only
-difference was those two bytes going from `0000` to `ff01`. The schedule's run time was unchanged
+difference was those two bytes going from `0000` to `ff01`. The program's run time was unchanged
 either side, which re-confirms the start-time reading at the same time.
 
 `0x01ff` is a strange thing to store for something the app presents as a switch, so the integration
@@ -339,23 +339,23 @@ was edited it moved from 2020-01-20 to 2020-01-21 — forward by exactly one day
 past, rather than to the date of the edit. So it is not a last-written date, whatever else it is.
 
 `flags & 0x40` is enabled — **confirmed**, and worth stating because the notes give `0x80` for a
-favorite and `0x40` for a schedule while both are written as `0xc0`, so the write side cannot tell
+favorite and `0x40` for a program while both are written as `0xc0`, so the write side cannot tell
 them apart. Populated slots read `0xdf` and an empty one `0x9f`: `0x80` is set in both, so it
 cannot be the enabled bit, and `0x40` can.
 
 **Contradicted**: the notes put the hour at byte 7 and the minute at byte 8. Real slots give 46:14,
-238:182 and 254:196 there. Those bytes are zero on empty slots, so they are schedule data of some
+238:182 and 254:196 there. Those bytes are zero on empty slots, so they are program data of some
 kind, but they are not the time of day. Where the device actually keeps it is **unknown** —
 possibly among bytes 9–12, which the notes call padding and nobody has looked at.
 
 ### Names
 
-**Contradicted.** The notes describe a name notification headed `0x07`. Schedules on our devices
+**Contradicted.** The notes describe a name notification headed `0x07`. Programs on our devices
 send theirs headed `0x04`, `0x05` or `0x85` — "Ok to Wake", "Nap Time", "Bed Time", "Weekday
 Sleep", "Weekend Wakeup". So the leading byte is not what identifies one; the printable text after
 it is. Favorites still send no name at all.
 
-A second fork, `SiloCityLabs/hatch-rest-gen1`, implements schedules with a different and larger
+A second fork, `SiloCityLabs/hatch-rest-gen1`, implements programs with a different and larger
 command set. Where it overlaps wmbest2 it agrees; where it does not, its provenance is harder to
 check — its README links to reverse-engineering notes that were never committed.
 
@@ -366,10 +366,10 @@ check — its README links to reverse-engineering notes that were never committe
 | Write with response on TX | unsupported | works, thousands of commands |
 | Commit reply | `01` | `OK`, same as every other command |
 | Favorite names | sent as `0x07` blocks | never sent, 24 reads |
-| Schedule names | sent as `0x07` blocks | sent headed `0x04`, `0x05` or `0x85` |
-| Schedule hour/minute | bytes 7 and 8 | those hold something else; time not located |
+| Program names | sent as `0x07` blocks | sent headed `0x04`, `0x05` or `0x85` |
+| Program hour/minute | bytes 7 and 8 | those hold something else; time not located |
 | Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |
-| Schedule bytes 1-4 | a modified timestamp | the start time, read as UTC |
-| Schedule bytes 7-8 | the hour and minute | the duration, in seconds |
-| Schedule bytes 11-12 | padding | the app's Toddler Lock |
+| Program bytes 1-4 | a modified timestamp | the start time, read as UTC |
+| Program bytes 7-8 | the hour and minute | the duration, in seconds |
+| Program bytes 11-12 | padding | the app's Toddler Lock |
 | `SD` sets the sleep timer | in seconds, four hex digits | acknowledged and ignored |

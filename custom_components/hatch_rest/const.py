@@ -54,7 +54,7 @@ FAVORITE_ENABLED_MASK = 0x80
 # well under a second on a healthy link; this only bounds a lost one.
 LIST_REPLY_TIMEOUT_SECONDS = 3
 
-# A schedule comes back on CHAR_LIST as a 20 byte block sharing its header
+# A program comes back on CHAR_LIST as a 20 byte block sharing its header
 # with a favorite, and differing only in length:
 # [0x01] [start LE x4] [sound] [volume] [duration LE x2] [00 x2] [lock LE x2]
 # [brightness] [B] [G] [R] [00] [days] [flags]
@@ -65,39 +65,39 @@ LIST_REPLY_TIMEOUT_SECONDS = 3
 # those give times like 46:14 and 238:182, which are not times at all.
 #
 # What bytes 1-4 actually hold is the start time, as a unix timestamp whose
-# time of day read *as UTC* is the local time the schedule runs at. The date
+# time of day read *as UTC* is the local time the program runs at. The date
 # part is when the slot was written. Reading it as UTC rather than converting
 # is what makes it right, and also what makes it immune to daylight saving.
 #
 # Bytes 7-8 are how long it runs for, in seconds. Every duration seen ends in
 # a spare 30 seconds, which is presumably how the app writes them.
-SCHEDULE_START_INDEX = 1
-SCHEDULE_DURATION_INDEX = 7
+PROGRAM_START_INDEX = 1
+PROGRAM_DURATION_INDEX = 7
 
 # The app's "Toddler Lock" toggle. Caught by diffing one slot across the app
 # session that turned it on: nothing else in the block moved except the date
 # half of the start value. Zero when off, 0x01ff when on -- an odd value for
 # something that reads as a switch, so it is reported as set or not and the
 # whole block is kept for whatever the rest of it may mean.
-SCHEDULE_LOCK_INDEX = 11
-SCHEDULE_SLOTS = 10
-SCHEDULE_BLOCK_LENGTH = 20
-SCHEDULE_SOUND_INDEX = 5
-SCHEDULE_VOLUME_INDEX = 6
-SCHEDULE_BRIGHTNESS_INDEX = 13
-SCHEDULE_BLUE_INDEX = 14
-SCHEDULE_GREEN_INDEX = 15
-SCHEDULE_RED_INDEX = 16
-SCHEDULE_DAYS_INDEX = 18
-SCHEDULE_FLAGS_INDEX = 19
+PROGRAM_LOCK_INDEX = 11
+PROGRAM_SLOTS = 10
+PROGRAM_BLOCK_LENGTH = 20
+PROGRAM_SOUND_INDEX = 5
+PROGRAM_VOLUME_INDEX = 6
+PROGRAM_BRIGHTNESS_INDEX = 13
+PROGRAM_BLUE_INDEX = 14
+PROGRAM_GREEN_INDEX = 15
+PROGRAM_RED_INDEX = 16
+PROGRAM_DAYS_INDEX = 18
+PROGRAM_FLAGS_INDEX = 19
 
 # 0x40, settled against real slots: populated ones read 0xdf and an empty one
 # reads 0x9f, so 0x80 cannot be it -- that would call the empty slot enabled.
 # The notes were right, and differ from favorites, which use 0x80.
-SCHEDULE_ENABLED_MASK = 0x40
+PROGRAM_ENABLED_MASK = 0x40
 
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
-SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+PROGRAM_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
 # The sleep timer answers in short ASCII hex rather than a block. GI says
 # whether one is running, GD gives what is left in minutes. Note the asymmetry
@@ -109,8 +109,8 @@ SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 TIMER_NONE = "FF"
 
 
-# Schedules fire off the device's own clock, which nothing else sets. It is
-# told the local wall clock, with no zone, the same way it stores a schedule's
+# Programs fire off the device's own clock, which nothing else sets. It is
+# told the local wall clock, with no zone, the same way it stores a program's
 # start time.
 #
 # Not before half past two in the morning. Between two and three the local
@@ -122,7 +122,7 @@ CLOCK_SYNC_EARLIEST = (2, 30)
 # Both kinds of block share the 0x01 header, so which one a reply is can only
 # be known from what was asked for.
 BLOCK_FAVORITE = "favorite"
-BLOCK_SCHEDULE = "schedule"
+BLOCK_PROGRAM = "program"
 
 # The device acknowledges every command with ASCII "OK" on CHAR_LIST, sent
 # after whatever data the command asked for. That makes it the end of an

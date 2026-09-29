@@ -81,7 +81,7 @@ async def async_setup_entry(
             BluetoothCallbackMatcher(address=address.upper(), connectable=True),
             BluetoothScanningMode.ACTIVE,
             # An AUTO mode scanner only turns active for a registered address
-            # on a schedule, which defaults to 10s every 5 minutes. State only
+            # on a program, which defaults to 10s every 5 minutes. State only
             # reaches us in the scan response, so ask for the tightest cadence
             # allowed. A scanner pinned to active or passive mode ignores this.
             scan_interval=ACTIVE_SCAN_INTERVAL_SECONDS,

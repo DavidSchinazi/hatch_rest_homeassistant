@@ -45,7 +45,7 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 * One per favorite: saves whatever the device is playing into that slot
 
 ### 📊 Sensor
-* One per schedule, showing what each of the ten slots is set to
+* One per program, showing what each of the ten slots is set to
 * Time remaining on the sleep timer
 
 ## ⭐ Favorites
@@ -89,7 +89,7 @@ This repo is a fork of
 The main difference is that this fork never disconnects BLE on idle, to ensure better
 responsiveness. Credit is also due to
 [wmbest2/hatch_rest_homeassistant](https://github.com/wmbest2/hatch_rest_homeassistant)
-for taking packet captures to add support for favorites, schedules, and more.
+for taking packet captures to add support for favorites, programs, and more.
 
 This fork was developed using Claude over a couple of days by a new sleep-deprived
 father, so there are most likely still bugs.
