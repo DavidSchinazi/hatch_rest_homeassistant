@@ -102,7 +102,12 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
 
     @property
     def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the time of day this schedule runs at.
+        """Return the name the schedule was given on the device.
+
+        The name says what a schedule is for in a way its time does not, and
+        the entity is already called "Schedule 3", which says neither. Six of
+        forty slots here have no name; those fall back to the time rather
+        than to a placeholder, since it is at least real.
 
         None until the slot has been read, which is not the same as a slot
         with nothing in it.
@@ -110,7 +115,7 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
         schedule = self._schedule
         if schedule is None:
             return None
-        return schedule["time"]
+        return schedule.get("name") or schedule["time"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -121,6 +126,7 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
 
         return {
             "name": schedule.get("name"),
+            "time": schedule["time"],
             "days": schedule["days"],
             "duration_seconds": schedule["duration_seconds"],
             # Kept because the layout here was worked out from real slots

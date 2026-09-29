@@ -67,16 +67,31 @@ class TestHatchBabyRestScheduleSensor:
 
         assert len(ids) == SCHEDULE_SLOTS
 
-    def test_state_is_the_time_of_day(
+    def test_state_is_the_name_from_the_device(
         self, coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test the sensor reads as the time the schedule runs at."""
+        """Test the sensor reads as the schedule's name.
+
+        Which says what it is for, where the time does not and the entity's
+        own name says neither.
+        """
+        sensor = HatchBabyRestScheduleSensor(coordinator, 1)
+
+        assert sensor.native_value == "Weekday Sleep"
+
+    def test_an_unnamed_slot_falls_back_to_its_time(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a slot the device never named still reads as something real."""
+        del coordinator.hatch_rest_device.schedules[1]["name"]
+
         assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "07:30"
 
-    def test_the_name_rides_along(self, coordinator: HatchBabyRestUpdateCoordinator):
-        """Test the name the device gave the schedule is exposed."""
+    def test_the_time_rides_along(self, coordinator: HatchBabyRestUpdateCoordinator):
+        """Test the time is exposed even though it is not the state."""
         attributes = HatchBabyRestScheduleSensor(coordinator, 1).extra_state_attributes
 
+        assert attributes["time"] == "07:30"
         assert attributes["name"] == "Weekday Sleep"
 
     def test_unread_slot_is_unknown(self, coordinator: HatchBabyRestUpdateCoordinator):
@@ -97,6 +112,7 @@ class TestHatchBabyRestScheduleSensor:
 
         assert attributes == {
             "name": "Weekday Sleep",
+            "time": "07:30",
             "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
             "duration_seconds": 3600,
             "raw": SCHEDULE_BLOCK.hex(),
@@ -218,6 +234,7 @@ class TestSensorsAgainstTheParser:
         }
         sensor = HatchBabyRestScheduleSensor(mock_coordinator, 1)
 
+        # No name has arrived for this one, so it falls back to the time.
         assert sensor.native_value == "07:30"
         # Every key the entity reaches for has to be one the parser wrote.
         assert sensor.extra_state_attributes["written_timestamp"] is not None
