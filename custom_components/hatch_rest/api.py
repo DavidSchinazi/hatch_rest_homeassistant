@@ -24,6 +24,8 @@ from bleak_retry_connector import (
 
 from .const import (
     ADVERTISEMENT_COLOR_INDEX,
+    FAVORITE_MASK,
+    FAVORITE_SLOTS,
     ADVERTISEMENT_POWER_INDEX,
     ADVERTISEMENT_SOUND_INDEX,
     CHAR_FEEDBACK,
@@ -68,12 +70,16 @@ def _parse_state(
 
     red, green, blue, brightness = data[color_index + 1 : color_index + 5]
 
+    power_byte = data[power_index + 1]
+    favorite = power_byte & FAVORITE_MASK
+
     return {
         "color": (red, green, blue),
         "brightness": brightness,
         "sound": PyHatchBabyRestSound(data[sound_index + 1]),
         "volume": data[sound_index + 2],
-        "power": not bool(POWER_OFF_MASK & data[power_index + 1]),
+        "power": not bool(POWER_OFF_MASK & power_byte),
+        "active_favorite": favorite if 1 <= favorite <= FAVORITE_SLOTS else None,
     }
 
 
@@ -107,6 +113,7 @@ class PyHatchBabyRestAsync:
         self.sound: PyHatchBabyRestSound | None = None
         self.volume: int | None = None
         self.power: bool | None = None
+        self.active_favorite: int | None = None
 
     def _set_active_operations(self, amount: int):
         """Change the number of running tasks."""
@@ -355,12 +362,14 @@ class PyHatchBabyRestAsync:
             self.sound,
             self.volume,
             self.power,
+            self.active_favorite,
         ) != (
             state["color"],
             state["brightness"],
             state["sound"],
             state["volume"],
             state["power"],
+            state["active_favorite"],
         )
 
         self.color = state["color"]
@@ -368,10 +377,11 @@ class PyHatchBabyRestAsync:
         self.sound = state["sound"]
         self.volume = state["volume"]
         self.power = state["power"]
+        self.active_favorite = state["active_favorite"]
 
         _LOGGER.debug(
             "%s %s state: color=%s brightness=%s sound=%s volume=%s power=%s "
-            "(changed=%s)",
+            "favorite=%s (changed=%s)",
             self.address,
             source,
             self.color,
@@ -379,6 +389,7 @@ class PyHatchBabyRestAsync:
             self.sound,
             self.volume,
             self.power,
+            self.active_favorite,
             changed,
         )
 

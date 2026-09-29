@@ -25,6 +25,13 @@ MARKER_SOUND = 0x53  # "S", followed by sound, volume
 MARKER_POWER = 0x50  # "P", followed by the power byte
 POWER_OFF_MASK = 0xC0  # bits set in the power byte while the device is off
 
+# The low bits of that same power byte name the favorite the device is
+# currently playing, so it costs nothing to read. Slots are numbered from one;
+# zero means none is selected, and 0x1f and 0x3f both show up meaning the same
+# thing. Anything outside the slot range is treated as no selection.
+FAVORITE_MASK = 0x3F
+FAVORITE_SLOTS = 6
+
 # Offsets of those markers within the feedback characteristic:
 # T .. .. .. .. C r g b br S sn vol P pwr
 FEEDBACK_COLOR_INDEX = 5

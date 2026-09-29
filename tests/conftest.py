@@ -69,6 +69,7 @@ def mock_hatch_api(mock_ble_device: BLEDevice) -> Generator[AsyncMock, None, Non
         mock_api.sound = PyHatchBabyRestSound.ocean
         mock_api.volume = 100
         mock_api.power = True
+        mock_api.active_favorite = None
 
         # No advertisement heard, so the coordinator falls back to reading
         # over GATT. Tests covering the advertisement path override this.
@@ -98,6 +99,7 @@ def mock_coordinator(
         hatch_rest_device=mock_hatch_api,
     )
     coordinator.data = {
+        "active_favorite": None,
         "brightness": 128,
         "color": (255, 128, 64),
         "power": True,

@@ -84,6 +84,7 @@ class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
         data: dict[
             str, int | tuple[int, int, int] | bool | PyHatchBabyRestSound | None
         ] = {
+            "active_favorite": self.hatch_rest_device.active_favorite,
             "brightness": self.hatch_rest_device.brightness,
             "color": self.hatch_rest_device.color,
             "power": self.hatch_rest_device.power,

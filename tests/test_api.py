@@ -66,6 +66,7 @@ class TestParseState:
             "sound": PyHatchBabyRestSound.ocean,
             "volume": 84,
             "power": False,
+            "active_favorite": None,
         }
 
     def test_parse_advertisement_matches_feedback(self):
@@ -81,6 +82,37 @@ class TestParseState:
             FEEDBACK_SOUND_INDEX,
             FEEDBACK_POWER_INDEX,
         )
+
+    @pytest.mark.parametrize(
+        ("power_byte", "expected_power", "expected_favorite"),
+        [
+            (0x00, True, None),  # on, nothing selected
+            (0x01, True, 1),  # on, playing favorite 1
+            (0x06, True, 6),  # on, playing the last slot
+            (0x07, True, None),  # past the last slot, so not a selection
+            (0x1F, True, None),  # seen in the wild meaning none
+            (0x80, False, None),  # off, favorite mode
+            (0xC0, False, None),  # off, manual mode
+            (0xDF, False, None),  # the captured payload: 0xdf & 0x3f == 0x1f
+            (0x81, False, 1),  # off, but favorite 1 is still the selection
+        ],
+    )
+    def test_parse_reads_favorite_from_the_power_byte(
+        self, power_byte, expected_power, expected_favorite
+    ):
+        """Test the low bits of the power byte name the active favorite."""
+        payload = bytearray(FEEDBACK)
+        payload[FEEDBACK_POWER_INDEX + 1] = power_byte
+
+        state = _parse_state(
+            payload,
+            FEEDBACK_COLOR_INDEX,
+            FEEDBACK_SOUND_INDEX,
+            FEEDBACK_POWER_INDEX,
+        )
+
+        assert state["power"] is expected_power
+        assert state["active_favorite"] == expected_favorite
 
     def test_parse_rejects_misaligned_payload(self):
         """Test a payload without the expected markers is rejected."""
@@ -437,6 +469,7 @@ class TestPyHatchBabyRestAsync:
                     "sound": PyHatchBabyRestSound.rain,
                     "volume": 5,
                     "power": True,
+                    "active_favorite": None,
                 },
                 "notification",
             )
