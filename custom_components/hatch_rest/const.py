@@ -225,6 +225,16 @@ CONNECT_TIMEOUT_SECONDS = 5
 RECONNECT_DELAY_SECONDS = 2
 MAX_RECONNECT_DELAY_SECONDS = 60
 
+# How far either side of its delay a reconnect may land, as a fraction of it.
+#
+# Every device starts together at setup and backs off on the same schedule,
+# so without this they retry in lockstep. Through a single proxy that is
+# self-defeating: seen with three Hatches sharing one after the other went
+# offline, each attempt queued behind the others, ran into the connect
+# deadline, and left the proxy still busy with it for the next round. Not one
+# connected in six minutes.
+RECONNECT_JITTER = 0.5
+
 # How long after a command to keep trusting what was written over what the
 # device advertises, so an advertisement still describing the old state does
 # not briefly revert it.

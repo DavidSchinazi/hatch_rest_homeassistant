@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 import logging
 import math
+import random
 import struct
 from time import monotonic
 
@@ -82,6 +83,7 @@ from .const import (
     MAX_RECONNECT_DELAY_SECONDS,
     POWER_OFF_MASK,
     RECONNECT_DELAY_SECONDS,
+    RECONNECT_JITTER,
     PyHatchBabyRestSound,
 )
 
@@ -608,10 +610,15 @@ class PyHatchBabyRestAsync:
         )
 
     def _schedule_reconnect(self, delay: float) -> None:
-        """Arrange to connect again after a delay."""
+        """Arrange to connect again after about a delay.
+
+        Spread either side of it, so devices that failed together do not all
+        come back at the same moment and fail together again.
+        """
         if not self._keep_connected:
             return
 
+        delay *= random.uniform(1 - RECONNECT_JITTER, 1 + RECONNECT_JITTER)
         self._cancel_reconnect()
         _LOGGER.debug("%s reconnecting in %.0fs", self.address, delay)
         self._reconnect_timer = asyncio.get_running_loop().call_later(

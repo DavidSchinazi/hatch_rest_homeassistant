@@ -2194,6 +2194,28 @@ class TestPyHatchBabyRestAsync:
         mock_schedule.assert_called_once_with(RECONNECT_DELAY_SECONDS)
 
     @pytest.mark.asyncio
+    async def test_reconnects_are_spread_out(self, api: PyHatchBabyRestAsync):
+        """Test devices that failed together do not all retry together.
+
+        In lockstep through one proxy, each attempt queued behind the others
+        and ran into the connect deadline, round after round.
+        """
+        api._keep_connected = True
+        delays = []
+        loop = asyncio.get_running_loop()
+
+        def record(delay, callback):
+            delays.append(delay)
+            return MagicMock()
+
+        with patch.object(loop, "call_later", side_effect=record):
+            for _ in range(50):
+                api._schedule_reconnect(60)
+
+        assert all(30 <= delay <= 90 for delay in delays)
+        assert len(set(delays)) > 1
+
+    @pytest.mark.asyncio
     async def test_failed_poll_does_not_retire_pending_reconnect(
         self, api: PyHatchBabyRestAsync
     ):
