@@ -814,7 +814,7 @@ class TestPyHatchBabyRestAsync:
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
             api._list_notification_received(None, bytearray(b"OK"))
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             favorite = await api.async_refresh_favorite(3)
 
         assert favorite is not None
@@ -830,7 +830,7 @@ class TestPyHatchBabyRestAsync:
             api._list_notification_received(None, bytearray(b"\x07\x00Bedtime\x00"))
             api._list_notification_received(None, bytearray(b"OK"))
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_favorite(2)
 
         assert api.favorites[2]["name"] == "Bedtime"
@@ -841,10 +841,8 @@ class TestPyHatchBabyRestAsync:
     ):
         """Test a slot that never replies does not wait forever."""
         with (
-            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
-            ),
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
         ):
             assert await api.async_refresh_favorite(1) is None
 
@@ -862,7 +860,7 @@ class TestPyHatchBabyRestAsync:
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
             api._list_notification_received(None, bytearray(b"OK"))
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_favorites()
 
         assert asked == [f"PGB{slot:02X}" for slot in range(1, 7)]
@@ -880,19 +878,15 @@ class TestPyHatchBabyRestAsync:
         still arriving.
         """
         with (
-            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.05
-            ),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.05
-            ),
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.05),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.05),
         ):
             # The block arrives but the acknowledgement never does.
             async def block_only(command):
                 api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
 
-            with patch.object(api, "_write_favorite_command", side_effect=block_only):
+            with patch.object(api, "_write_list_command", side_effect=block_only):
                 assert await api.async_refresh_favorite(1) is None
 
         # The contents were still recorded, since they did arrive.
@@ -922,7 +916,7 @@ class TestPyHatchBabyRestAsync:
         """
         sent, answer = self._favorite_answers(api)
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_set_favorite(2, brightness=10)
 
         # Colour, sound and volume are the ones the block already held.
@@ -938,7 +932,7 @@ class TestPyHatchBabyRestAsync:
         """Test an unread slot is fetched before being rewritten."""
         sent, answer = self._favorite_answers(api)
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_set_favorite(4, volume=20)
 
         assert sent[0] == "PGB04"
@@ -952,13 +946,9 @@ class TestPyHatchBabyRestAsync:
         Writing it would commit defaults over whatever it actually held.
         """
         with (
-            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
-            ),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
-            ),
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
             pytest.raises(HatchRestConnectionError, match="favorite 5"),
         ):
             await api.async_set_favorite(5, volume=20)
@@ -991,7 +981,7 @@ class TestPyHatchBabyRestAsync:
         )
 
         with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "_write_list_command", side_effect=answer),
             patch.object(api, "set_active_favorite", new_callable=AsyncMock),
         ):
             await api.async_save_favorite(6)
@@ -1026,7 +1016,7 @@ class TestPyHatchBabyRestAsync:
         )
 
         with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "_write_list_command", side_effect=answer),
             patch.object(api, "set_active_favorite", new_callable=AsyncMock),
         ):
             await api.async_save_favorite(5)
@@ -1059,7 +1049,7 @@ class TestPyHatchBabyRestAsync:
         )
 
         with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
+            patch.object(api, "_write_list_command", side_effect=answer),
             patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send,
         ):
             await api.async_save_favorite(4)
@@ -1092,13 +1082,9 @@ class TestPyHatchBabyRestAsync:
             return
 
         with (
-            patch.object(api, "_write_favorite_command", side_effect=never_answer),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.01
-            ),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
-            ),
+            patch.object(api, "_write_list_command", side_effect=never_answer),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
             patch.object(api, "_send_command", new_callable=AsyncMock) as mock_send,
             pytest.raises(HatchRestConnectionError),
         ):
@@ -1144,10 +1130,8 @@ class TestPyHatchBabyRestAsync:
             api._list_notification_received(None, bytearray(b"OK"))
 
         with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
-            patch(
-                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.01
-            ),
+            patch.object(api, "_write_list_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
             pytest.raises(HatchRestConnectionError, match="did not acknowledge PSN"),
         ):
             await api.async_set_favorite(2, brightness=10)
@@ -1165,7 +1149,7 @@ class TestPyHatchBabyRestAsync:
         """
         _, answer = self._favorite_answers(api)
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             # The device keeps answering with the original block, so the
             # brightness that was asked for is not what comes back.
             await api.async_set_favorite(2, brightness=10)
@@ -1179,7 +1163,7 @@ class TestPyHatchBabyRestAsync:
         """Test writing back what the slot already held warns about nothing."""
         _, answer = self._favorite_answers(api)
 
-        with patch.object(api, "_write_favorite_command", side_effect=answer):
+        with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_set_favorite(2, brightness=127)
 
         assert "did not take what was asked for" not in caplog.text
@@ -1194,7 +1178,7 @@ class TestPyHatchBabyRestAsync:
         dropping it would hang the caller waiting for it.
         """
         api._commands_in_flight = 1
-        api._favorite_slot_in_flight = 4
+        api._slot_in_flight = 4
 
         api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
 
@@ -1204,7 +1188,7 @@ class TestPyHatchBabyRestAsync:
         self, api: PyHatchBabyRestAsync
     ):
         """Test an unsolicited block is not filed against a guessed slot."""
-        api._favorite_slot_in_flight = None
+        api._slot_in_flight = None
 
         api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
 
@@ -1225,7 +1209,7 @@ class TestPyHatchBabyRestAsync:
         api._settle_until = 0.0
 
         with patch.object(api, "_client_connect", new_callable=AsyncMock):
-            await api._write_favorite_command("PGB01")
+            await api._write_list_command("PGB01")
 
         mock_client.write_gatt_char.assert_awaited_once()
         assert api._settle_until == 0.0
@@ -1239,11 +1223,11 @@ class TestPyHatchBabyRestAsync:
 
         Every slot would time out, six times over, on every reconnect.
         """
-        api._favorites_supported = False
+        api._list_supported = False
 
-        api._start_favorite_sweep()
+        api._start_sweep()
 
-        assert api._favorite_sweep_task is None
+        assert api._sweep_task is None
 
     def test_has_state_and_advertisement_age(self, api: PyHatchBabyRestAsync):
         """Test state and freshness are only known after a parse."""

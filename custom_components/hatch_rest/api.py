@@ -25,7 +25,7 @@ from bleak_retry_connector import (
 from .const import (
     ADVERTISEMENT_COLOR_INDEX,
     CHAR_LIST,
-    FAVORITE_BLOCK_HEADER,
+    BLOCK_HEADER,
     FAVORITE_BLOCK_LENGTH,
     FAVORITE_BLUE_INDEX,
     FAVORITE_BRIGHTNESS_INDEX,
@@ -34,12 +34,12 @@ from .const import (
     FAVORITE_FLAG_ENABLED,
     FAVORITE_FLAGS_INDEX,
     FAVORITE_GREEN_INDEX,
-    FAVORITE_ACK,
-    FAVORITE_ACK_TIMEOUT_SECONDS,
+    LIST_ACK,
+    LIST_ACK_TIMEOUT_SECONDS,
     FAVORITE_MASK,
     FAVORITE_NAME_HEADER,
     FAVORITE_RED_INDEX,
-    FAVORITE_REPLY_TIMEOUT_SECONDS,
+    LIST_REPLY_TIMEOUT_SECONDS,
     FAVORITE_SLOTS,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
@@ -110,7 +110,7 @@ def _parse_favorite_block(data: bytes) -> dict:
     if len(data) < FAVORITE_BLOCK_LENGTH:
         raise ValueError(f"favorite block is {len(data)} bytes, want at least 15")
 
-    _assert_marker(data, 0, FAVORITE_BLOCK_HEADER)
+    _assert_marker(data, 0, BLOCK_HEADER)
 
     sound_id = data[FAVORITE_SOUND_INDEX]
     try:
@@ -199,14 +199,14 @@ class PyHatchBabyRestAsync:
         self.favorites: dict[int, dict] = {}
         # CHAR_LIST carries no request id, so replies are matched to requests
         # by only ever having one outstanding.
-        self._favorite_lock = asyncio.Lock()
-        self._favorite_slot_in_flight: int | None = None
-        self._favorite_block_reply: asyncio.Future[dict] | None = None
-        self._favorite_ack_reply: asyncio.Future[None] | None = None
-        self._favorite_sweep_task: asyncio.Task | None = None
-        # Whether the device answered the subscription for favorite replies.
-        # Sweeping one that did not would just be six timeouts.
-        self._favorites_supported: bool = False
+        self._list_lock = asyncio.Lock()
+        self._slot_in_flight: int | None = None
+        self._block_reply: asyncio.Future[dict] | None = None
+        self._ack_reply: asyncio.Future[None] | None = None
+        self._sweep_task: asyncio.Task | None = None
+        # Whether the device answered the subscription for command replies.
+        # Sweeping one that did not would just be timeouts.
+        self._list_supported: bool = False
 
     def _set_active_operations(self, amount: int):
         """Change the number of running tasks."""
@@ -250,21 +250,21 @@ class PyHatchBabyRestAsync:
         else:
             _LOGGER.debug("%s subscribed to feedback notifications", self.address)
 
-        # Separately, so that a device which will not talk about favorites
-        # still reports its state.
+        # Separately, so that a device which will not answer questions still
+        # reports its state.
         try:
             await client.start_notify(CHAR_LIST, self._list_notification_received)
         except Exception as e:  # noqa: BLE001
-            self._favorites_supported = False
+            self._list_supported = False
             _LOGGER.debug(
-                "%s does not support favorite notifications -- %r", self.address, e
+                "%s does not support reply notifications -- %r", self.address, e
             )
         else:
-            self._favorites_supported = True
-            _LOGGER.debug("%s subscribed to favorite notifications", self.address)
+            self._list_supported = True
+            _LOGGER.debug("%s subscribed to reply notifications", self.address)
 
     def _list_notification_received(self, characteristic, data: bytearray) -> None:
-        """Handle a reply to a favorite command.
+        """Handle a reply to a command.
 
         Deliberately not gated on _commands_in_flight the way state
         notifications are. That gate exists to stop a stale reading of the
@@ -274,37 +274,37 @@ class PyHatchBabyRestAsync:
         if not data:
             return
 
-        if data[0] == FAVORITE_BLOCK_HEADER:
+        if data[0] == BLOCK_HEADER:
             try:
                 favorite = _parse_favorite_block(data)
             except (IndexError, ValueError) as e:
                 _LOGGER.debug("Ignoring unparseable favorite %s -- %r", data.hex(), e)
                 return
 
-            slot = self._favorite_slot_in_flight
+            slot = self._slot_in_flight
             if slot is None:
                 _LOGGER.debug("Ignoring favorite block with nothing in flight")
                 return
 
             _LOGGER.debug("%s favorite %d: %s", self.address, slot, favorite)
             self.favorites.setdefault(slot, {}).update(favorite)
-            self._resolve(self._favorite_block_reply, favorite)
+            self._resolve(self._block_reply, favorite)
 
         elif data[0] == FAVORITE_NAME_HEADER:
             name = self._parse_favorite_name(data)
-            slot = self._favorite_slot_in_flight
+            slot = self._slot_in_flight
             if not name or slot is None:
                 return
 
             _LOGGER.debug("%s favorite %d is named %r", self.address, slot, name)
             self.favorites.setdefault(slot, {})["name"] = name
 
-        elif bytes(data) == FAVORITE_ACK:
-            _LOGGER.debug("%s acknowledged the favorite command", self.address)
-            self._resolve(self._favorite_ack_reply, None)
+        elif bytes(data) == LIST_ACK:
+            _LOGGER.debug("%s acknowledged the command", self.address)
+            self._resolve(self._ack_reply, None)
 
         else:
-            _LOGGER.debug("%s unhandled favorite reply %s", self.address, data.hex())
+            _LOGGER.debug("%s unhandled reply %s", self.address, data.hex())
 
     @staticmethod
     def _parse_favorite_name(data: bytes) -> str:
@@ -373,7 +373,7 @@ class PyHatchBabyRestAsync:
 
         if self._client is not None:
             self._reconnect_delay = RECONNECT_DELAY_SECONDS
-            self._start_favorite_sweep()
+            self._start_sweep()
             return
 
         self._schedule_reconnect(self._reconnect_delay)
@@ -495,9 +495,9 @@ class PyHatchBabyRestAsync:
         _LOGGER.debug("%s stopping", self.address)
         self._keep_connected = False
         self._cancel_reconnect()
-        if self._favorite_sweep_task is not None:
-            self._favorite_sweep_task.cancel()
-            self._favorite_sweep_task = None
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            self._sweep_task = None
         self._active_operations = 0
         await self._client_disconnect()
 
@@ -680,22 +680,19 @@ class PyHatchBabyRestAsync:
                 monotonic() - start,  # pyright: ignore[reportPossiblyUnboundVariable]
             )
 
-    def _start_favorite_sweep(self) -> None:
+    def _start_sweep(self) -> None:
         """Read the stored favorites in the background.
 
         Off the connect path on purpose: connecting is what commands wait on,
         and six round trips of housekeeping have no business delaying it.
         """
-        if not self._favorites_supported:
+        if not self._list_supported:
             return
 
-        if (
-            self._favorite_sweep_task is not None
-            and not self._favorite_sweep_task.done()
-        ):
+        if self._sweep_task is not None and not self._sweep_task.done():
             return
 
-        self._favorite_sweep_task = asyncio.create_task(self.async_refresh_favorites())
+        self._sweep_task = asyncio.create_task(self.async_refresh_favorites())
 
     async def async_refresh_favorites(self) -> None:
         """Ask the device for every stored favorite."""
@@ -704,7 +701,7 @@ class PyHatchBabyRestAsync:
 
     async def async_refresh_favorite(self, slot: int) -> dict | None:
         """Ask the device for one stored favorite."""
-        if not await self._favorite_exchange(f"PGB{slot:02X}", slot=slot):
+        if not await self._list_exchange(f"PGB{slot:02X}", slot=slot):
             return None
         return self.favorites.get(slot)
 
@@ -759,7 +756,7 @@ class PyHatchBabyRestAsync:
             wanted["enabled"],
         )
         for command in commands:
-            if not await self._favorite_exchange(command):
+            if not await self._list_exchange(command):
                 # Nothing is stored until the commit, so stopping short of it
                 # leaves the slot exactly as it was. Carrying on regardless
                 # would be worse than giving up: if it was the command
@@ -827,7 +824,7 @@ class PyHatchBabyRestAsync:
 
         return written
 
-    async def _favorite_exchange(self, command: str, slot: int | None = None) -> bool:
+    async def _list_exchange(self, command: str, slot: int | None = None) -> bool:
         """Send a favorite command and wait for what it replies with.
 
         Returns whether the device answered. What it answered with, when it
@@ -844,21 +841,21 @@ class PyHatchBabyRestAsync:
         acknowledgement alone. Either way the acknowledgement comes last, so
         waiting for it is what makes it safe to send the next command.
         """
-        async with self._favorite_lock:
+        async with self._list_lock:
             loop = asyncio.get_running_loop()
-            self._favorite_slot_in_flight = slot
-            self._favorite_block_reply = loop.create_future()
-            self._favorite_ack_reply = loop.create_future()
+            self._slot_in_flight = slot
+            self._block_reply = loop.create_future()
+            self._ack_reply = loop.create_future()
 
             try:
-                await self._write_favorite_command(command)
+                await self._write_list_command(command)
 
                 if slot is not None:
-                    async with asyncio.timeout(FAVORITE_REPLY_TIMEOUT_SECONDS):
-                        await self._favorite_block_reply
+                    async with asyncio.timeout(LIST_REPLY_TIMEOUT_SECONDS):
+                        await self._block_reply
 
-                async with asyncio.timeout(FAVORITE_ACK_TIMEOUT_SECONDS):
-                    await self._favorite_ack_reply
+                async with asyncio.timeout(LIST_ACK_TIMEOUT_SECONDS):
+                    await self._ack_reply
 
             except TimeoutError:
                 _LOGGER.warning("%s did not answer %s", self.address, command)
@@ -869,13 +866,13 @@ class PyHatchBabyRestAsync:
                 return False
 
             finally:
-                self._favorite_block_reply = None
-                self._favorite_ack_reply = None
+                self._block_reply = None
+                self._ack_reply = None
 
             return True
 
-    async def _write_favorite_command(self, command: str) -> None:
-        """Write a favorite command to the device.
+    async def _write_list_command(self, command: str) -> None:
+        """Write a command whose reply comes back on CHAR_LIST.
 
         Unlike _send_command this leaves the settle window and the in-flight
         command count alone. Reading or rewriting a stored favorite does not
@@ -889,7 +886,7 @@ class PyHatchBabyRestAsync:
             if self._client is None:
                 raise HatchRestConnectionError(f"{self.address} could not be connected")
 
-            _LOGGER.debug("%s favorite command: %s", self.address, command)
+            _LOGGER.debug("%s list command: %s", self.address, command)
             await self._client.write_gatt_char(
                 char_specifier=CHAR_TX,
                 data=bytearray(command, "utf-8"),

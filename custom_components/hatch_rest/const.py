@@ -40,7 +40,7 @@ FAVORITE_SLOTS = 6
 # Note the colour arrives blue first, while the command that writes a favorite
 # takes it red first. The two are not symmetric.
 FAVORITE_BLOCK_LENGTH = 15
-FAVORITE_BLOCK_HEADER = 0x01
+BLOCK_HEADER = 0x01
 FAVORITE_SOUND_INDEX = 1
 FAVORITE_VOLUME_INDEX = 2
 FAVORITE_BRIGHTNESS_INDEX = 9
@@ -55,14 +55,14 @@ FAVORITE_NAME_HEADER = 0x07
 
 # How long to wait for a reply to a favorite command. Replies come back in
 # well under a second on a healthy link; this only bounds a lost one.
-FAVORITE_REPLY_TIMEOUT_SECONDS = 3
+LIST_REPLY_TIMEOUT_SECONDS = 3
 
 # The device acknowledges every command with ASCII "OK" on CHAR_LIST, sent
 # after whatever data the command asked for. That makes it the end of an
 # exchange: once it arrives, nothing further is coming for this request and
 # the next one can safely go out. Observed arriving within ~20ms of the data.
-FAVORITE_ACK = b"OK"
-FAVORITE_ACK_TIMEOUT_SECONDS = 1
+LIST_ACK = b"OK"
+LIST_ACK_TIMEOUT_SECONDS = 1
 
 # The flags byte written back to a slot. Only the enabled bit is understood;
 # the low bits are whatever the device already had there.
