@@ -1376,6 +1376,98 @@ class TestPyHatchBabyRestAsync:
         assert len(api.favorites) == 6
         assert len(api.schedules) == 10
 
+    @pytest.mark.asyncio
+    async def test_refresh_timer_reads_nothing_running(self, api: PyHatchBabyRestAsync):
+        """Test FF from the device means no timer, not a duration.
+
+        This is the reply an idle device gives, so reading it as a number
+        would invent a timer on every device that has none.
+        """
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            api._list_notification_received(None, bytearray(b"FF"))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        # Having been told there is none, it does not go on to ask how long.
+        assert asked == ["GI"]
+        assert api.timer_remaining is None
+        assert api.timer_total is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_timer_reads_the_remaining_minutes(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a running timer is read as hex minutes."""
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            if command == "GI":
+                api._list_notification_received(None, bytearray(b"0020"))
+            else:
+                api._list_notification_received(None, bytearray(b"0076"))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        assert asked == ["GI", "GD"]
+        # 0x76 is 118, not 76 -- the reply is hex.
+        assert api.timer_remaining == 118
+
+    @pytest.mark.asyncio
+    async def test_timer_counts_down_without_asking_again(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the remaining time moves on its own between reads.
+
+        The device is asked once per connection; pestering it every poll for
+        something that only moves one way would be a round trip wasted.
+        """
+
+        async def answer(command):
+            api._list_notification_received(
+                None, bytearray(b"0020" if command == "GI" else b"000a")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        assert api.timer_remaining == 10
+
+        # Five minutes later, without having asked anything.
+        api._timer_expires_at -= 5 * 60
+        assert api.timer_remaining == 5
+
+    def test_timer_never_reads_below_zero(self, api: PyHatchBabyRestAsync):
+        """Test an expired timer reads as zero rather than negative."""
+        api._timer_expires_at = monotonic() - 600
+
+        assert api.timer_remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_refresh_timer_survives_an_answer_it_cannot_read(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a reply that is not hex leaves the timer unknown."""
+
+        async def answer(command):
+            api._list_notification_received(
+                None, bytearray(b"0020" if command == "GI" else b"what")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        assert api.timer_remaining is None
+
     def test_favorite_block_with_nothing_in_flight_is_ignored(
         self, api: PyHatchBabyRestAsync
     ):

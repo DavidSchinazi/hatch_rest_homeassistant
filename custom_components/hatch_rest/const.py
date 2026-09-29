@@ -85,6 +85,12 @@ SCHEDULE_ENABLED_MASK = 0x40
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
 SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
+# The sleep timer answers in short ASCII hex rather than a block. GI says
+# whether one is running, answering FF when none is; GD gives what is left,
+# in minutes, as four hex digits. Note the asymmetry with setting it, which
+# takes seconds.
+TIMER_NONE = "FF"
+
 # Both kinds of block share the 0x01 header, so which one a reply is can only
 # be known from what was asked for.
 BLOCK_FAVORITE = "favorite"

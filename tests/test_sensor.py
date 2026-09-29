@@ -12,6 +12,7 @@ from custom_components.hatch_rest.const import (
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.sensor import (
     HatchBabyRestScheduleSensor,
+    HatchBabyRestTimerSensor,
     async_setup_entry,
 )
 
@@ -55,8 +56,11 @@ class TestHatchBabyRestScheduleSensor:
             hass, config_entry, lambda entities, **_: added.extend(entities)
         )
 
-        assert len(added) == SCHEDULE_SLOTS
-        assert [sensor._slot for sensor in added] == list(range(1, 11))
+        schedules = [s for s in added if isinstance(s, HatchBabyRestScheduleSensor)]
+        timers = [s for s in added if isinstance(s, HatchBabyRestTimerSensor)]
+
+        assert [sensor._slot for sensor in schedules] == list(range(1, 11))
+        assert len(timers) == 1
 
     def test_unique_ids_do_not_collide(
         self, coordinator: HatchBabyRestUpdateCoordinator
@@ -145,3 +149,39 @@ class TestHatchBabyRestScheduleSensor:
         sensor = HatchBabyRestScheduleSensor(coordinator, 1)
 
         assert sensor.entity_category is EntityCategory.CONFIG
+
+
+class TestHatchBabyRestTimerSensor:
+    """Tests for HatchBabyRestTimerSensor."""
+
+    def test_reports_the_minutes_left(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the sensor follows what the device layer counts down."""
+        mock_coordinator.hatch_rest_device.timer_remaining = 12
+
+        assert HatchBabyRestTimerSensor(mock_coordinator).native_value == 12
+
+    def test_reports_nothing_when_no_timer_is_running(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test an idle device reports no value rather than zero.
+
+        Zero minutes left is a timer about to fire, which is not the same as
+        having none set.
+        """
+        mock_coordinator.hatch_rest_device.timer_remaining = None
+
+        assert HatchBabyRestTimerSensor(mock_coordinator).native_value is None
+
+    def test_unique_id_does_not_collide_with_a_schedule(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the timer is distinguishable from the ten schedules."""
+        ids = {
+            HatchBabyRestScheduleSensor(mock_coordinator, slot).unique_id
+            for slot in range(1, SCHEDULE_SLOTS + 1)
+        }
+        ids.add(HatchBabyRestTimerSensor(mock_coordinator).unique_id)
+
+        assert len(ids) == SCHEDULE_SLOTS + 1

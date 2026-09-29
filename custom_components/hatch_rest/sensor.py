@@ -1,11 +1,11 @@
-"""Hatch Rest schedule sensors."""
+"""Hatch Rest schedule and timer sensors."""
 
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -20,15 +20,46 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up a sensor for each of the device's schedules."""
+    """Set up the schedule sensors and the sleep timer."""
     coordinator = config_entry.runtime_data
     async_add_entities(
         [
-            HatchBabyRestScheduleSensor(coordinator, slot)
-            for slot in range(1, SCHEDULE_SLOTS + 1)
+            *(
+                HatchBabyRestScheduleSensor(coordinator, slot)
+                for slot in range(1, SCHEDULE_SLOTS + 1)
+            ),
+            HatchBabyRestTimerSensor(coordinator),
         ],
         update_before_add=False,
     )
+
+
+class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """How much of the device's sleep timer is left.
+
+    The device is asked once per connection and the answer counted down from
+    there, so this moves without anything being sent.
+    """
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
+        """Initialize the timer sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.unique_id}_timer_remaining"
+
+    @property
+    def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the name of the entity."""
+        if self._hatch_rest_device.name:
+            return f"{self._hatch_rest_device.name.title()} Timer Remaining"
+        return None
+
+    @property
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the minutes left, or nothing when no timer is running."""
+        return self._hatch_rest_device.timer_remaining
 
 
 class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]

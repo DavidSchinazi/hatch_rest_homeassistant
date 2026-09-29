@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 import logging
+import math
 import struct
 from time import monotonic
 
@@ -59,6 +60,7 @@ from .const import (
     SCHEDULE_SLOTS,
     SCHEDULE_SOUND_INDEX,
     SCHEDULE_VOLUME_INDEX,
+    TIMER_NONE,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
     ADVERTISEMENT_POWER_INDEX,
@@ -262,6 +264,12 @@ class PyHatchBabyRestAsync:
         self.favorites: dict[int, dict] = {}
         # Stored schedules, by slot number. Read only for now.
         self.schedules: dict[int, dict] = {}
+
+        # The sleep timer, as the device last reported it. Read once per
+        # connection and counted down locally from there, rather than asked
+        # for repeatedly -- it only ever runs one way.
+        self.timer_total: int | None = None
+        self._timer_expires_at: float | None = None
         # CHAR_LIST carries no request id, so replies are matched to requests
         # by only ever having one outstanding.
         self._list_lock = asyncio.Lock()
@@ -271,6 +279,8 @@ class PyHatchBabyRestAsync:
         # apart.
         self._block_kind_in_flight: str | None = None
         self._block_reply: asyncio.Future[dict] | None = None
+        self._text_reply: asyncio.Future[str] | None = None
+        self._last_text: str | None = None
         self._ack_reply: asyncio.Future[None] | None = None
         self._sweep_task: asyncio.Task | None = None
         # Whether the device answered the subscription for command replies.
@@ -358,6 +368,14 @@ class PyHatchBabyRestAsync:
         elif bytes(data) == LIST_ACK:
             _LOGGER.debug("%s acknowledged the command", self.address)
             self._resolve(self._ack_reply, None)
+
+        elif self._text_reply is not None:
+            text = bytes(data).decode("ascii", errors="ignore").strip()
+            if not text:
+                return
+            _LOGGER.debug("%s answered %r", self.address, text)
+            self._last_text = text
+            self._resolve(self._text_reply, text)
 
         else:
             _LOGGER.debug("%s unhandled reply %s", self.address, data.hex())
@@ -801,6 +819,7 @@ class PyHatchBabyRestAsync:
         """Read everything the device stores."""
         await self.async_refresh_favorites()
         await self.async_refresh_schedules()
+        await self.async_refresh_timer()
 
     async def async_refresh_favorites(self) -> None:
         """Ask the device for every stored favorite."""
@@ -947,8 +966,64 @@ class PyHatchBabyRestAsync:
 
         return written
 
+    @property
+    def timer_remaining(self) -> int | None:
+        """Return the minutes left on the sleep timer, if one is running.
+
+        Rounded up, so a timer the device just called 118 minutes does not
+        read as 117 the instant it is asked. Whole minutes are all the device
+        reports, and counting down means holding each one until it is spent.
+        """
+        if self._timer_expires_at is None:
+            return None
+        return max(0, math.ceil((self._timer_expires_at - monotonic()) / 60))
+
+    async def async_refresh_timer(self) -> None:
+        """Ask the device about its sleep timer.
+
+        Two questions: whether one is running, and how much is left. Asked
+        once per connection, because the answer only moves one way and can be
+        counted down from here without pestering the device for it.
+        """
+        if not await self._list_exchange("GI", text=True):
+            return
+
+        if self._last_text == TIMER_NONE:
+            self.timer_total = None
+            self._timer_expires_at = None
+            _LOGGER.debug("%s has no sleep timer running", self.address)
+            return
+
+        # What this means when a timer IS running has not been confirmed, so
+        # it is logged as it arrives rather than interpreted.
+        _LOGGER.debug(
+            "%s sleep timer total reported as %r", self.address, self._last_text
+        )
+        try:
+            self.timer_total = int(self._last_text, 16)  # pyright: ignore[reportArgumentType]
+        except (TypeError, ValueError):
+            self.timer_total = None
+
+        if not await self._list_exchange("GD", text=True):
+            return
+
+        try:
+            minutes = int(self._last_text, 16)  # pyright: ignore[reportArgumentType]
+        except (TypeError, ValueError):
+            _LOGGER.debug(
+                "%s gave %r for time remaining", self.address, self._last_text
+            )
+            return
+
+        _LOGGER.debug("%s has %d minutes of sleep timer left", self.address, minutes)
+        self._timer_expires_at = monotonic() + minutes * 60
+
     async def _list_exchange(
-        self, command: str, slot: int | None = None, kind: str | None = None
+        self,
+        command: str,
+        slot: int | None = None,
+        kind: str | None = None,
+        text: bool = False,
     ) -> bool:
         """Send a command and wait for what it replies with.
 
@@ -971,6 +1046,8 @@ class PyHatchBabyRestAsync:
             self._slot_in_flight = slot
             self._block_kind_in_flight = kind
             self._block_reply = loop.create_future()
+            self._text_reply = loop.create_future() if text else None
+            self._last_text = None
             self._ack_reply = loop.create_future()
 
             try:
@@ -979,6 +1056,10 @@ class PyHatchBabyRestAsync:
                 if slot is not None:
                     async with asyncio.timeout(LIST_REPLY_TIMEOUT_SECONDS):
                         await self._block_reply
+
+                if text:
+                    async with asyncio.timeout(LIST_REPLY_TIMEOUT_SECONDS):
+                        await self._text_reply
 
                 async with asyncio.timeout(LIST_ACK_TIMEOUT_SECONDS):
                     await self._ack_reply
@@ -993,6 +1074,7 @@ class PyHatchBabyRestAsync:
 
             finally:
                 self._block_reply = None
+                self._text_reply = None
                 self._ack_reply = None
 
             return True
