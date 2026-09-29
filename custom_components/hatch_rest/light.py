@@ -6,8 +6,10 @@ from typing import Any
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
+    ATTR_EFFECT,
     ATTR_RGB_COLOR,
     LightEntity,
+    LightEntityFeature,
 )
 from homeassistant.components.light.const import ColorMode
 from homeassistant.config_entries import ConfigEntry
@@ -15,10 +17,19 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
-from .const import DEFAULT_ON_BRIGHTNESS
+from .const import COLOR_GRADIENT, DEFAULT_ON_BRIGHTNESS
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# The device has no separate mode for this: cycling through colours is what it
+# does when told to show one particular colour, so the effect is offered as a
+# way to ask for that colour without having to land on it exactly in a picker.
+#
+# There is deliberately no "off" entry to go with it. Leaving the effect means
+# choosing some other colour, and which one that should be is not something the
+# device remembers or this integration can invent.
+EFFECT_RAINBOW = "Rainbow"
 
 
 @dataclass
@@ -45,6 +56,8 @@ async def async_setup_entry(
 
 class HatchBabyRestLight(HatchBabyRestEntity, RestoreEntity, LightEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Hatch Rest light entity."""
+
+    _attr_supported_features = LightEntityFeature.EFFECT
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
         """Initialize the light."""
@@ -119,10 +132,27 @@ class HatchBabyRestLight(HatchBabyRestEntity, RestoreEntity, LightEntity):  # py
         """Return supported color modes."""
         return {ColorMode.RGB}
 
+    @property
+    def effect_list(self) -> list[str]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the effects this light can be asked for."""
+        return [EFFECT_RAINBOW]
+
+    @property
+    def effect(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the effect currently running, if it is one we can name."""
+        if self.coordinator.data.get("color") == COLOR_GRADIENT:
+            return EFFECT_RAINBOW
+        return None
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Set the light on."""
         brightness = kwargs.get(ATTR_BRIGHTNESS)
         rgb = kwargs.get(ATTR_RGB_COLOR)
+
+        if kwargs.get(ATTR_EFFECT) == EFFECT_RAINBOW:
+            # Asked for last, so a colour arriving in the same call cannot
+            # quietly cancel the effect that was actually requested.
+            rgb = COLOR_GRADIENT
 
         if not self._hatch_rest_device.power:
             _LOGGER.debug("light _hatch_rest_device power not on -- turning on")

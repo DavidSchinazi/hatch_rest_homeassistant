@@ -3,12 +3,16 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
+from homeassistant.components.light import (
+    ATTR_BRIGHTNESS,
+    ATTR_RGB_COLOR,
+    LightEntityFeature,
+)
 from homeassistant.components.light.const import ColorMode
 from homeassistant.helpers.restore_state import RestoredExtraData
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from custom_components.hatch_rest.const import DEFAULT_ON_BRIGHTNESS
+from custom_components.hatch_rest.const import COLOR_GRADIENT, DEFAULT_ON_BRIGHTNESS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.light import HatchBabyRestLight
 
@@ -76,6 +80,70 @@ class TestHatchBabyRestLight:
         """Test name when device name is None."""
         light_entity._hatch_rest_device.name = None
         assert light_entity.name is None
+
+    def test_effect_list_offers_rainbow(self, light_entity: HatchBabyRestLight):
+        """Test the rainbow effect is offered."""
+        assert light_entity.effect_list == ["Rainbow"]
+        assert light_entity.supported_features & LightEntityFeature.EFFECT
+
+    def test_effect_reports_rainbow_at_the_gradient_colour(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test the effect is reported from the colour the device holds.
+
+        The device has no separate mode for it, so the only way to know the
+        effect is running is that it is sitting on that exact colour.
+        """
+        light_entity.coordinator.data["color"] = COLOR_GRADIENT
+
+        assert light_entity.effect == "Rainbow"
+
+    def test_effect_is_none_at_any_other_colour(self, light_entity: HatchBabyRestLight):
+        """Test an ordinary colour is not reported as an effect."""
+        light_entity.coordinator.data["color"] = (255, 128, 64)
+
+        assert light_entity.effect is None
+
+    @pytest.mark.asyncio
+    async def test_selecting_rainbow_writes_the_gradient_colour(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test asking for the effect sets the colour that produces it."""
+        light_entity.coordinator.data["brightness"] = 200
+
+        await light_entity.async_turn_on(effect="Rainbow")
+
+        light_entity._hatch_rest_device.set_color.assert_awaited_once_with(
+            *COLOR_GRADIENT
+        )
+
+    @pytest.mark.asyncio
+    async def test_rainbow_is_not_cancelled_by_a_colour_in_the_same_call(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test the effect wins over a colour sent alongside it.
+
+        Both arriving together is ambiguous, and honouring the colour would
+        silently do the opposite of what was asked for.
+        """
+        light_entity.coordinator.data["brightness"] = 200
+
+        await light_entity.async_turn_on(effect="Rainbow", rgb_color=(1, 2, 3))
+
+        light_entity._hatch_rest_device.set_color.assert_awaited_once_with(
+            *COLOR_GRADIENT
+        )
+
+    @pytest.mark.asyncio
+    async def test_selecting_rainbow_with_brightness_is_one_command(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test colour and brightness still go together in one write."""
+        await light_entity.async_turn_on(effect="Rainbow", brightness=100)
+
+        light_entity._hatch_rest_device.set_color_and_brightness.assert_awaited_once_with(
+            *COLOR_GRADIENT, 100
+        )
 
     @pytest.mark.asyncio
     async def test_async_turn_on_basic(self, light_entity: HatchBabyRestLight):
