@@ -46,10 +46,49 @@ class TestHatchBabyRestMediaPlayer:
         media_player_entity.coordinator.data["sound"] = PyHatchBabyRestSound.ocean
         assert media_player_entity.source == "Ocean"
 
-    def test_source_none(self, media_player_entity: HatchBabyRestMediaPlayer):
-        """Test source when sound is None."""
+    def test_source_unknown(self, media_player_entity: HatchBabyRestMediaPlayer):
+        """Test source when nothing is known about the sound yet."""
         media_player_entity.coordinator.data["sound"] = None
         assert media_player_entity.source is None
+
+    def test_source_when_playing_nothing(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test playing nothing is reported as the source it is.
+
+        Its sound is zero, which reads as absent if the check is a truthiness
+        one -- so the device would say it was playing nothing and the entity
+        would say it had no idea.
+        """
+        media_player_entity.coordinator.data["sound"] = PyHatchBabyRestSound.none
+
+        assert media_player_entity.source == "None"
+
+    @pytest.mark.parametrize("sound", list(PyHatchBabyRestSound))
+    def test_every_source_is_one_the_list_offers(
+        self, media_player_entity: HatchBabyRestMediaPlayer, sound
+    ):
+        """Test the reported source is always selectable.
+
+        Home Assistant matches the two by string, so a source reported but
+        not listed cannot be chosen back again, and one listed but never
+        reported looks like it never takes.
+        """
+        media_player_entity.coordinator.data["sound"] = sound
+
+        assert media_player_entity.source in media_player_entity.source_list
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sound", list(PyHatchBabyRestSound))
+    async def test_every_source_round_trips(
+        self, media_player_entity: HatchBabyRestMediaPlayer, sound
+    ):
+        """Test selecting what is reported asks for the same sound back."""
+        media_player_entity.coordinator.data["sound"] = sound
+
+        await media_player_entity.async_select_source(media_player_entity.source)
+
+        media_player_entity._hatch_rest_device.set_sound.assert_awaited_once_with(sound)
 
     def test_source_list(self, media_player_entity: HatchBabyRestMediaPlayer):
         """Test source_list contains all sounds."""

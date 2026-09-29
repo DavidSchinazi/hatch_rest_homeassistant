@@ -118,19 +118,17 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, RestoreEntity, MediaPlayerEn
 
     @property
     def source(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the current source of the media player."""
-        if self.coordinator.data.get("sound"):
-            _LOGGER.debug(
-                "media_player source = %d (%s)",
-                self.coordinator.data.get("sound"),
-                PyHatchBabyRestSound(self.coordinator.data.get("sound")).name,
-            )
-        else:
-            _LOGGER.debug("media_player source = None")
+        """Return the current source of the media player.
+
+        Playing nothing is one of the sources the device offers, and the list
+        names it, so it is reported rather than passed off as not knowing.
+        The sound for it is zero, which is what made that easy to get wrong.
+        """
         sound = self.coordinator.data.get("sound")
-        if sound:
-            return sound.name.capitalize()
-        return None
+        _LOGGER.debug("media_player source = %s", sound)
+        if sound is None:
+            return None
+        return sound.name.capitalize()
 
     @property
     def source_list(self) -> list[str] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
