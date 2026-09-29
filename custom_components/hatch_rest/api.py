@@ -53,6 +53,7 @@ from .const import (
     SCHEDULE_ENABLED_MASK,
     SCHEDULE_FLAGS_INDEX,
     SCHEDULE_GREEN_INDEX,
+    SCHEDULE_LOCK_INDEX,
     SCHEDULE_DURATION_INDEX,
     SCHEDULE_RED_INDEX,
     SCHEDULE_SLOTS,
@@ -233,9 +234,14 @@ def _parse_schedule_block(data: bytes) -> dict:
         "volume": data[SCHEDULE_VOLUME_INDEX],
         "enabled": bool(flags & SCHEDULE_ENABLED_MASK),
         "flags": flags,
-        # The date half of the start value, which is when the slot was last
-        # written rather than anything the schedule does.
-        "written_timestamp": start,
+        # The app calls this Toddler Lock. It reads as a switch, but holds
+        # 0x01ff rather than 1, so only whether it is set is reported.
+        "toddler_lock": bool(struct.unpack_from("<H", data, SCHEDULE_LOCK_INDEX)[0]),
+        # The whole start value. Its time of day is when the schedule runs,
+        # which is confirmed; what the date half is for is not. It sits years
+        # in the past and moved forward by exactly one day when a slot was
+        # edited, which is not what a last-written date would do.
+        "start_timestamp": start,
         "raw": bytes(data).hex(),
     }
 

@@ -256,6 +256,23 @@ class TestParseScheduleBlock:
         """Test the duration comes out of bytes 7-8."""
         assert _parse_schedule_block(SCHEDULE_BLOCK)["duration_seconds"] == 3600
 
+    @pytest.mark.parametrize(
+        ("lock_bytes", "expected"),
+        [("0000", False), ("ff01", True)],
+    )
+    def test_reads_the_toddler_lock(self, lock_bytes, expected):
+        """Test the app's Toddler Lock toggle comes out of bytes 11-12.
+
+        Found by diffing one slot across the app session that turned it on:
+        nothing else in the block moved except the date half of the start
+        value. It holds 0x01ff rather than 1, so only whether it is set is
+        reported.
+        """
+        payload = bytearray(SCHEDULE_BLOCK)
+        payload[11:13] = bytes.fromhex(lock_bytes)
+
+        assert _parse_schedule_block(payload)["toddler_lock"] is expected
+
     def test_keeps_the_block_whole(self):
         """Test the raw bytes are carried through.
 

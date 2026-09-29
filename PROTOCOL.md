@@ -274,8 +274,8 @@ A schedule fed to the favorite parser does not fail — it returns a plausible f
 from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
 
 ```
-[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×4] [brightness] [B] [G] [R] [00] [days] [flags]
-   0         1-4         5        6          7-8          9-12       13      14  15  16   17    18     19
+[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×2] [lock LE ×2] [brightness] [B] [G] [R] [00] [days] [flags]
+   0         1-4         5        6          7-8          9-10       11-12         13      14  15  16   17    18     19
 ```
 
 **Confirmed**: sound, volume, brightness, colour (blue first, as in a favorite), and days. Days is
@@ -309,6 +309,25 @@ Weekend Sleep     19:00  for 12h30m  Fri,Sat
 ```
 
 Every duration seen ends in a spare 30 seconds, which is presumably how the app writes them.
+
+### Toddler Lock — not in either source
+
+Bytes 11-12, zero when off and `0x01ff` when on. Neither published source mentions this field at
+all; both treat bytes 9-12 as padding.
+
+Found by diffing all forty slots across a session in which the owner turned the toggle on in the
+Hatch app. Exactly one slot changed, and apart from the date half of the start value the only
+difference was those two bytes going from `0000` to `ff01`. The schedule's run time was unchanged
+either side, which re-confirms the start-time reading at the same time.
+
+`0x01ff` is a strange thing to store for something the app presents as a switch, so the integration
+reports only whether it is set and keeps the whole block for whatever the value may otherwise mean.
+
+### The date half of the start value — **unknown**
+
+Its time of day is the run time, which is confirmed. What the date is for is not. On the slot that
+was edited it moved from 2020-01-20 to 2020-01-21 — forward by exactly one day, six years in the
+past, rather than to the date of the edit. So it is not a last-written date, whatever else it is.
 
 `flags & 0x40` is enabled — **confirmed**, and worth stating because the notes give `0x80` for a
 favorite and `0x40` for a schedule while both are written as `0xc0`, so the write side cannot tell

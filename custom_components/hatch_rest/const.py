@@ -56,7 +56,7 @@ LIST_REPLY_TIMEOUT_SECONDS = 3
 
 # A schedule comes back on CHAR_LIST as a 20 byte block sharing its header
 # with a favorite, and differing only in length:
-# [0x01] [start LE x4] [sound] [volume] [duration LE x2] [00 x4]
+# [0x01] [start LE x4] [sound] [volume] [duration LE x2] [00 x2] [lock LE x2]
 # [brightness] [B] [G] [R] [00] [days] [flags]
 # Colour is blue first here too.
 #
@@ -73,6 +73,13 @@ LIST_REPLY_TIMEOUT_SECONDS = 3
 # a spare 30 seconds, which is presumably how the app writes them.
 SCHEDULE_START_INDEX = 1
 SCHEDULE_DURATION_INDEX = 7
+
+# The app's "Toddler Lock" toggle. Caught by diffing one slot across the app
+# session that turned it on: nothing else in the block moved except the date
+# half of the start value. Zero when off, 0x01ff when on -- an odd value for
+# something that reads as a switch, so it is reported as set or not and the
+# whole block is kept for whatever the rest of it may mean.
+SCHEDULE_LOCK_INDEX = 11
 SCHEDULE_SLOTS = 10
 SCHEDULE_BLOCK_LENGTH = 20
 SCHEDULE_SOUND_INDEX = 5

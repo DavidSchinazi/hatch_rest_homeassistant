@@ -142,8 +142,9 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
             ),
             "volume": schedule["volume"],
             "enabled": schedule["enabled"],
+            "toddler_lock": schedule["toddler_lock"],
             # Reported because which bit means enabled is still unsettled,
             # and because a disabled slot is what will settle it.
             "flags": schedule["flags"],
-            "written_timestamp": schedule["written_timestamp"],
+            "start_timestamp": schedule["start_timestamp"],
         }

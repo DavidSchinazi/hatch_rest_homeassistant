@@ -121,8 +121,9 @@ class TestHatchBabyRestScheduleSensor:
             "sound": "rain",
             "volume": 40,
             "enabled": True,
+            "toddler_lock": False,
             "flags": 0x40,
-            "written_timestamp": SCHEDULE["written_timestamp"],
+            "start_timestamp": SCHEDULE["start_timestamp"],
         }
 
     def test_attributes_keep_the_raw_flags_byte(
@@ -237,7 +238,7 @@ class TestSensorsAgainstTheParser:
         # No name has arrived for this one, so it falls back to the time.
         assert sensor.native_value == "07:30"
         # Every key the entity reaches for has to be one the parser wrote.
-        assert sensor.extra_state_attributes["written_timestamp"] is not None
+        assert sensor.extra_state_attributes["start_timestamp"] is not None
 
     def test_a_slot_known_only_by_name_does_not_throw(
         self, mock_coordinator: HatchBabyRestUpdateCoordinator
