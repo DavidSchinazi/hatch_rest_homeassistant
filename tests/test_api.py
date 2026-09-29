@@ -1590,6 +1590,79 @@ class TestPyHatchBabyRestAsync:
         assert len(api.favorites) == 6
         assert len(api.schedules) == 10
 
+    @staticmethod
+    def _timer_answers(api: PyHatchBabyRestAsync):
+        """Return a stand-in device that answers timer commands as idle."""
+        sent = []
+
+        async def answer(command):
+            sent.append(command)
+            if command in ("GI", "GD"):
+                api._list_notification_received(None, bytearray(b"FF"))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return sent, answer
+
+    @pytest.mark.asyncio
+    async def test_set_timer_sends_seconds(self, api: PyHatchBabyRestAsync):
+        """Test minutes are converted, since the device is set in seconds.
+
+        It reports what is left in minutes, so the two directions differ.
+        """
+        sent, answer = self._timer_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(15)
+
+        # 15 minutes is 900 seconds, which is 0x0384.
+        assert sent[0] == "SD0384"
+
+    @pytest.mark.asyncio
+    async def test_set_timer_reads_it_back(self, api: PyHatchBabyRestAsync):
+        """Test the device is asked what it made of the setting.
+
+        What it reports for the total has never been seen with a timer
+        actually running, so this is how that gets found out.
+        """
+        sent, answer = self._timer_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(15)
+
+        assert "GI" in sent
+
+    @pytest.mark.asyncio
+    async def test_set_timer_zero_cancels(self, api: PyHatchBabyRestAsync):
+        """Test zero is sent as a duration rather than refused."""
+        sent, answer = self._timer_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(0)
+
+        assert sent[0] == "SD0000"
+        assert api.timer_remaining is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("minutes", [-1, 121])
+    async def test_set_timer_refuses_what_the_device_cannot_hold(
+        self, api: PyHatchBabyRestAsync, minutes
+    ):
+        """Test a duration outside the range is refused before being sent."""
+        with pytest.raises(ValueError, match="not between"):
+            await api.async_set_timer(minutes)
+
+    @pytest.mark.asyncio
+    async def test_set_timer_raises_when_it_is_not_acknowledged(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a timer the device never acknowledged is reported, not assumed."""
+        with (
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+            pytest.raises(HatchRestConnectionError, match="did not accept"),
+        ):
+            await api.async_set_timer(15)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("idle_reply", [b"FF", b"00"])
     async def test_refresh_timer_reads_an_idle_device(

@@ -59,6 +59,13 @@ father, so no promises.
 ### 🔘 Button
 * One per favorite: saves whatever the device is playing into that slot
 
+### 📊 Sensor
+* One per schedule, showing what each of the ten slots is set to
+* Time remaining on the sleep timer
+
+### 🔢 Number
+* The sleep timer, in minutes. Zero cancels it
+
 ## ⭐ Favorites
 
 The six favorites stored on the device can be read and rewritten from Home

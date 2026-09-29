@@ -157,6 +157,18 @@ what makes it safe to send the next command.
 `SiloCityLabs/hatch-rest-gen1` independently mentions an `OK` / `E01`–`E06` handshake, which fits
 what we see, though we have never observed an error reply.
 
+## The sleep timer
+
+`SD{ssss}` sets it, in **seconds**, four hex digits. `GI` asks whether one is running and `GD` how
+many minutes are left — note that setting and reporting use different units.
+
+**Confirmed**: an idle device answers `GI` with `FF` on three of our four devices and `00` on the
+fourth, which the notes do not mention. Both mean the same thing.
+
+**Unconfirmed**: what `GI` answers while a timer *is* running. We have never seen one, so the
+integration logs that reply as it arrives rather than interpreting it, and asks `GD` for the
+figure it actually uses.
+
 ## Favorites
 
 Six slots, numbered 1–6, stored on the device. **Confirmed**: all six read on all four devices.
@@ -251,7 +263,6 @@ Present in the published sources, untouched here, and therefore entirely **Inher
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
 - Writing schedules — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
   schedule's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
-- Setting the sleep timer — `SD{ssss}`, in seconds.
 
 ## Schedules
 

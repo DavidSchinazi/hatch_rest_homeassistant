@@ -101,6 +101,10 @@ SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 # total or a remainder of zero means the same thing: nothing is running.
 TIMER_NONE = "FF"
 
+# Setting it takes seconds in four hex digits, so anything the device could
+# hold fits in 0xffff. Two hours is as long as the app offers.
+TIMER_MAX_MINUTES = 120
+
 # Schedules fire off the device's own clock, which nothing else sets. It is
 # told the local wall clock, with no zone, the same way it stores a schedule's
 # start time.

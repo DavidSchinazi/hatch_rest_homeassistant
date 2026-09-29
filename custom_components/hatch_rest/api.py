@@ -59,6 +59,7 @@ from .const import (
     SCHEDULE_SOUND_INDEX,
     SCHEDULE_START_INDEX,
     SCHEDULE_VOLUME_INDEX,
+    TIMER_MAX_MINUTES,
     TIMER_NONE,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
@@ -1094,6 +1095,30 @@ class PyHatchBabyRestAsync:
 
         _LOGGER.debug("%s has %d minutes of sleep timer left", self.address, minutes)
         self._timer_expires_at = monotonic() + minutes * 60
+
+    async def async_set_timer(self, minutes: int) -> None:
+        """Set the sleep timer, or cancel it with zero.
+
+        Note the asymmetry: this takes seconds while the device reports what
+        is left in minutes.
+        """
+        if not 0 <= minutes <= TIMER_MAX_MINUTES:
+            raise ValueError(
+                f"sleep timer of {minutes} minutes is not between 0 and "
+                f"{TIMER_MAX_MINUTES}"
+            )
+
+        _LOGGER.debug("%s setting a sleep timer of %d minutes", self.address, minutes)
+        if not await self._list_exchange(f"SD{minutes * 60:04x}"):
+            raise HatchRestConnectionError(
+                f"{self.address} did not accept a sleep timer"
+            )
+
+        # Read it back rather than assume. What the device reports for the
+        # total has never been seen with a timer actually running, so this is
+        # also how that gets found out.
+        await self.async_refresh_timer()
+        self._notify_state_changed()
 
     def _clear_timer(self) -> None:
         """Forget any sleep timer this device was thought to be running."""
