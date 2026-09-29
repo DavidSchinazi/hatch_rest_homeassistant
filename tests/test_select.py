@@ -240,3 +240,42 @@ class TestSetFavoriteService:
         for name in documented:
             assert PyHatchBabyRestSound[name] is not None
         assert SET_FAVORITE_SCHEMA is not None
+
+
+class TestServiceRegistration:
+    """Tests that the service is actually wired up on platform setup."""
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_the_service(
+        self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test setting up the platform registers set_favorite.
+
+        The registration is easy to get wrong in a way nothing else catches:
+        the service simply never appears, and the entity looks fine.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.hatch_rest.select import (
+            SERVICE_SET_FAVORITE,
+            async_setup_entry,
+        )
+
+        config_entry = MagicMock()
+        config_entry.runtime_data = mock_coordinator
+        platform = MagicMock()
+
+        with patch(
+            "custom_components.hatch_rest.select.entity_platform"
+            ".async_get_current_platform",
+            return_value=platform,
+        ):
+            await async_setup_entry(hass, config_entry, MagicMock())
+
+        platform.async_register_entity_service.assert_called_once()
+        name, schema, func = platform.async_register_entity_service.call_args.args
+        assert name == SERVICE_SET_FAVORITE
+        assert func == "async_set_favorite"
+        # The method the service dispatches to has to exist on the entity.
+        assert hasattr(HatchBabyRestFavoriteSelect, func)
+        assert "slot" in {str(key) for key in schema}
