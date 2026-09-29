@@ -571,7 +571,6 @@ class PyHatchBabyRestAsync:
 
         if self._client is not None:
             self._reconnect_delay = RECONNECT_DELAY_SECONDS
-            self._start_sweep()
             return
 
         self._schedule_reconnect(self._reconnect_delay)
@@ -657,6 +656,11 @@ class PyHatchBabyRestAsync:
             self._client = client
             if client is not None:
                 self._cancel_reconnect()
+                # Here rather than in _connect_and_retry, so a connection
+                # opened by a command or a poll reads the device too. One
+                # that only the reconnect loop swept would leave the slots
+                # unread whenever something else happened to connect first.
+                self._start_sweep()
             self._connection_cv.notify_all()
 
     async def _client_disconnect(self) -> None:

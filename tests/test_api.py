@@ -432,10 +432,12 @@ class TestPyHatchBabyRestAsync:
 
     @pytest.fixture
     def api(self, mock_ble_device: BLEDevice) -> Generator[PyHatchBabyRestAsync]:
-        """Create API instance, cancelling any pending idle disconnect."""
+        """Create API instance, cancelling any pending reconnect or sweep."""
         api = PyHatchBabyRestAsync(mock_ble_device)
         yield api
         api._cancel_reconnect()
+        if api._sweep_task is not None:
+            api._sweep_task.cancel()
 
     def test_init(self, api: PyHatchBabyRestAsync, mock_ble_device: BLEDevice):
         """Test API initialization."""
@@ -1895,6 +1897,36 @@ class TestPyHatchBabyRestAsync:
         assert api._settle_until == 0.0
         assert api._commands_in_flight == 0
         assert api._active_operations == 0
+
+    @pytest.mark.asyncio
+    async def test_a_connection_opened_by_a_command_sweeps(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the slots are read however the connection came about.
+
+        Seen on a device whose first connection after a restart was opened
+        by a light command: only the reconnect loop swept, so its programs
+        and timer were never read.
+        """
+        mock_client = AsyncMock()
+        mock_client.is_connected = True
+
+        async def subscribe(client):
+            api._list_supported = True
+
+        with (
+            patch(
+                "custom_components.hatch_rest.api.establish_connection",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch.object(api, "_start_notifications", side_effect=subscribe),
+            patch.object(api, "_sweep", new_callable=AsyncMock) as sweep,
+        ):
+            await api.turn_power_on()
+            await asyncio.sleep(0)
+
+        sweep.assert_awaited_once()
 
     def test_no_sweep_when_the_device_cannot_report_favorites(
         self, api: PyHatchBabyRestAsync
