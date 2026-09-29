@@ -177,7 +177,14 @@ ADVERTISEMENT_STALE_SECONDS = 300
 # between 0.6s and 1.7s, while a stuck attempt runs until it is cut off.
 # Giving up early costs little, since the retry follows a couple of seconds
 # later and repeated failures back off on their own.
-CONNECT_TIMEOUT_SECONDS = 5
+#
+# Ten rather than the five that range argues for, because the weakest device
+# here sat at -89dBm failing seven connects in a row, every one cut off on the
+# deadline, with slots free on its proxy and its neighbour on the same proxy
+# connecting fine. That looks like a device refusing rather than a slow link,
+# but the only way to tell them apart is to give a slow one room and see
+# whether anything lands in between.
+CONNECT_TIMEOUT_SECONDS = 10
 
 # How long to wait before trying a dropped connection again, and the most
 # it will ever wait.
