@@ -8,7 +8,6 @@ https://github.com/kjoconnor/pyhatchbabyrest/blob/master/LICENSE
 
 import asyncio
 from collections.abc import Callable
-import contextlib
 from datetime import datetime
 import logging
 from time import monotonic
@@ -33,8 +32,9 @@ from .const import (
     FAVORITE_ENABLED_MASK,
     FAVORITE_FLAGS_INDEX,
     FAVORITE_GREEN_INDEX,
+    FAVORITE_ACK,
+    FAVORITE_ACK_TIMEOUT_SECONDS,
     FAVORITE_MASK,
-    FAVORITE_NAME_GRACE_SECONDS,
     FAVORITE_NAME_HEADER,
     FAVORITE_RED_INDEX,
     FAVORITE_REPLY_TIMEOUT_SECONDS,
@@ -173,7 +173,7 @@ class PyHatchBabyRestAsync:
         self._favorite_lock = asyncio.Lock()
         self._favorite_slot_in_flight: int | None = None
         self._favorite_block_reply: asyncio.Future[dict] | None = None
-        self._favorite_name_reply: asyncio.Future[str] | None = None
+        self._favorite_ack_reply: asyncio.Future[None] | None = None
         self._favorite_sweep_task: asyncio.Task | None = None
         # Whether the device answered the subscription for favorite replies.
         # Sweeping one that did not would just be six timeouts.
@@ -269,7 +269,10 @@ class PyHatchBabyRestAsync:
 
             _LOGGER.debug("%s favorite %d is named %r", self.address, slot, name)
             self.favorites.setdefault(slot, {})["name"] = name
-            self._resolve(self._favorite_name_reply, name)
+
+        elif bytes(data) == FAVORITE_ACK:
+            _LOGGER.debug("%s acknowledged the favorite command", self.address)
+            self._resolve(self._favorite_ack_reply, None)
 
         else:
             _LOGGER.debug("%s unhandled favorite reply %s", self.address, data.hex())
@@ -672,41 +675,41 @@ class PyHatchBabyRestAsync:
 
     async def async_refresh_favorite(self, slot: int) -> dict | None:
         """Ask the device for one stored favorite."""
-        return await self._favorite_exchange(f"PGB{slot:02X}", slot)
+        return await self._favorite_exchange(f"PGB{slot:02X}", slot=slot)
 
-    async def _favorite_exchange(self, command: str, slot: int) -> dict | None:
-        """Send a favorite command and wait for the block it replies with.
+    async def _favorite_exchange(
+        self, command: str, slot: int | None = None
+    ) -> dict | None:
+        """Send a favorite command and wait for what it replies with.
 
-        Only one exchange runs at a time. The reply carries nothing that
+        Only one exchange runs at a time. The replies carry nothing that
         identifies the request, so the only way to know which slot a block
         describes is to have asked for exactly one.
+
+        Commands that ask for a slot get that slot's contents, optionally its
+        name, and then an acknowledgement. Commands that only write get the
+        acknowledgement alone. Either way the acknowledgement comes last, so
+        waiting for it is what makes it safe to send the next command.
         """
         async with self._favorite_lock:
             loop = asyncio.get_running_loop()
             self._favorite_slot_in_flight = slot
             self._favorite_block_reply = loop.create_future()
-            self._favorite_name_reply = loop.create_future()
+            self._favorite_ack_reply = loop.create_future()
 
             try:
                 await self._write_favorite_command(command)
 
-                async with asyncio.timeout(FAVORITE_REPLY_TIMEOUT_SECONDS):
-                    favorite = await self._favorite_block_reply
+                favorite = None
+                if slot is not None:
+                    async with asyncio.timeout(FAVORITE_REPLY_TIMEOUT_SECONDS):
+                        favorite = await self._favorite_block_reply
 
-                # The name follows separately, and not every slot has one.
-                # Keep hold of the lock while waiting so a late one is still
-                # attributed to this slot.
-                with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout(FAVORITE_NAME_GRACE_SECONDS):
-                        await self._favorite_name_reply
+                async with asyncio.timeout(FAVORITE_ACK_TIMEOUT_SECONDS):
+                    await self._favorite_ack_reply
 
             except TimeoutError:
-                _LOGGER.warning(
-                    "%s did not answer %s within %ss",
-                    self.address,
-                    command,
-                    FAVORITE_REPLY_TIMEOUT_SECONDS,
-                )
+                _LOGGER.warning("%s did not answer %s", self.address, command)
                 return None
 
             except Exception as e:  # noqa: BLE001
@@ -715,7 +718,7 @@ class PyHatchBabyRestAsync:
 
             finally:
                 self._favorite_block_reply = None
-                self._favorite_name_reply = None
+                self._favorite_ack_reply = None
 
             return favorite
 

@@ -756,11 +756,9 @@ class TestPyHatchBabyRestAsync:
         async def answer(command):
             assert command == "PGB03"
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
 
-        with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
-            patch("custom_components.hatch_rest.api.FAVORITE_NAME_GRACE_SECONDS", 0.01),
-        ):
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
             favorite = await api.async_refresh_favorite(3)
 
         assert favorite is not None
@@ -774,6 +772,7 @@ class TestPyHatchBabyRestAsync:
         async def answer(command):
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
             api._list_notification_received(None, bytearray(b"\x07\x00Bedtime\x00"))
+            api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_favorite_command", side_effect=answer):
             await api.async_refresh_favorite(2)
@@ -805,15 +804,43 @@ class TestPyHatchBabyRestAsync:
         async def answer(command):
             asked.append(command)
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
 
-        with (
-            patch.object(api, "_write_favorite_command", side_effect=answer),
-            patch("custom_components.hatch_rest.api.FAVORITE_NAME_GRACE_SECONDS", 0.01),
-        ):
+        with patch.object(api, "_write_favorite_command", side_effect=answer):
             await api.async_refresh_favorites()
 
         assert asked == [f"PGB{slot:02X}" for slot in range(1, 7)]
         assert sorted(api.favorites) == [1, 2, 3, 4, 5, 6]
+
+    @pytest.mark.asyncio
+    async def test_refresh_favorite_waits_for_the_acknowledgement(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test an exchange is not considered over until the device says so.
+
+        Every command is acknowledged with "OK" after its data, so the ack is
+        what makes it safe to send the next one. Returning on the block alone
+        would let the following request go out while replies to this one were
+        still arriving.
+        """
+        with (
+            patch.object(api, "_write_favorite_command", new_callable=AsyncMock),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_REPLY_TIMEOUT_SECONDS", 0.05
+            ),
+            patch(
+                "custom_components.hatch_rest.api.FAVORITE_ACK_TIMEOUT_SECONDS", 0.05
+            ),
+        ):
+            # The block arrives but the acknowledgement never does.
+            async def block_only(command):
+                api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+
+            with patch.object(api, "_write_favorite_command", side_effect=block_only):
+                assert await api.async_refresh_favorite(1) is None
+
+        # The contents were still recorded, since they did arrive.
+        assert api.favorites[1]["volume"] == 84
 
     def test_favorite_reply_is_read_while_a_command_is_in_flight(
         self, api: PyHatchBabyRestAsync

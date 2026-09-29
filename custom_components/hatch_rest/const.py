@@ -57,10 +57,12 @@ FAVORITE_NAME_HEADER = 0x07
 # well under a second on a healthy link; this only bounds a lost one.
 FAVORITE_REPLY_TIMEOUT_SECONDS = 3
 
-# A slot's name follows its contents as a separate notification, so the reply
-# is held open briefly afterwards. Without this the name could arrive after
-# the next slot has been asked for and be filed against the wrong one.
-FAVORITE_NAME_GRACE_SECONDS = 0.5
+# The device acknowledges every command with ASCII "OK" on CHAR_LIST, sent
+# after whatever data the command asked for. That makes it the end of an
+# exchange: once it arrives, nothing further is coming for this request and
+# the next one can safely go out. Observed arriving within ~20ms of the data.
+FAVORITE_ACK = b"OK"
+FAVORITE_ACK_TIMEOUT_SECONDS = 1
 
 # Offsets of those markers within the feedback characteristic:
 # T .. .. .. .. C r g b br S sn vol P pwr
