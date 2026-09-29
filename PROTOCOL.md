@@ -235,9 +235,46 @@ We keep the parsing in case some device sends it, and fall back to numbering the
 Present in the published sources, untouched here, and therefore entirely **Inherited**:
 
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
-- Schedules — `EGB`/`ESB`/`ESL`/`ESF`, ten slots of twenty bytes.
-- Sleep timer — `SD{ssss}` to set, `GI` and `GD` to query.
+- Writing schedules — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
+  schedule's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
+- Setting the sleep timer — `SD{ssss}`, in seconds.
 - Clock — `ST{YYYYMMDDHHmmss}U`.
+
+## Schedules
+
+**Confirmed**: ten slots, read with `EGB{NN}` (`01`–`0A`), replying with a 20-byte block on
+`CHAR_LIST`. All forty slots across four devices read without a timeout.
+
+The block shares its `0x01` header with a favorite and differs only in length, 20 against 15.
+A schedule fed to the favorite parser does not fail — it returns a plausible favorite assembled
+from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
+
+```
+[0x01] [modified LE ×4] [sound] [volume] [?] [?] [? ×4] [brightness] [B] [G] [R] [?] [days] [flags]
+   0          1-4           5        6     7   8   9-12       13      14  15  16  17    18     19
+```
+
+**Confirmed** in that layout: the sound and volume, the brightness, the colour (blue first, as in
+a favorite), and the days. Days is a bitmask with bit 0 = Sunday; real slots read 0x3e for
+weekdays, 0x60 for the weekend, 0x00 for an empty slot. The colour is what carried it — an "Ok to
+Wake" schedule decodes green.
+
+`flags & 0x40` is enabled — **confirmed**, and worth stating because the notes give `0x80` for a
+favorite and `0x40` for a schedule while both are written as `0xc0`, so the write side cannot tell
+them apart. Populated slots read `0xdf` and an empty one `0x9f`: `0x80` is set in both, so it
+cannot be the enabled bit, and `0x40` can.
+
+**Contradicted**: the notes put the hour at byte 7 and the minute at byte 8. Real slots give 46:14,
+238:182 and 254:196 there. Those bytes are zero on empty slots, so they are schedule data of some
+kind, but they are not the time of day. Where the device actually keeps it is **unknown** —
+possibly among bytes 9–12, which the notes call padding and nobody has looked at.
+
+### Names
+
+**Contradicted.** The notes describe a name notification headed `0x07`. Schedules on our devices
+send theirs headed `0x04`, `0x05` or `0x85` — "Ok to Wake", "Nap Time", "Bed Time", "Weekday
+Sleep", "Weekend Wakeup". So the leading byte is not what identifies one; the printable text after
+it is. Favorites still send no name at all.
 
 A second fork, `SiloCityLabs/hatch-rest-gen1`, implements schedules with a different and larger
 command set. Where it overlaps wmbest2 it agrees; where it does not, its provenance is harder to
@@ -250,3 +287,6 @@ check — its README links to reverse-engineering notes that were never committe
 | Write with response on TX | unsupported | works, thousands of commands |
 | Commit reply | `01` | `OK`, same as every other command |
 | Favorite names | sent as `0x07` blocks | never sent, 24 reads |
+| Schedule names | sent as `0x07` blocks | sent headed `0x04`, `0x05` or `0x85` |
+| Schedule hour/minute | bytes 7 and 8 | those hold something else; time not located |
+| Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |

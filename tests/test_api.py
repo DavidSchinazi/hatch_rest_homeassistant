@@ -218,12 +218,18 @@ SCHEDULE_BLOCK = bytes.fromhex(
 class TestParseScheduleBlock:
     """Tests for the 20-byte block returned by EGB."""
 
-    def test_reads_the_time(self):
-        """Test the hour and minute come back."""
+    def test_keeps_the_block_whole(self):
+        """Test the raw bytes are carried through.
+
+        Where the device keeps the time of day is not known -- the bytes the
+        notes point at hold something else entirely on real slots -- so the
+        block is reported as it arrived rather than partly interpreted.
+        """
         schedule = _parse_schedule_block(SCHEDULE_BLOCK)
 
-        assert schedule["hour"] == 7
-        assert schedule["minute"] == 30
+        assert schedule["raw"] == SCHEDULE_BLOCK.hex()
+        assert "hour" not in schedule
+        assert "minute" not in schedule
 
     def test_reads_colour_as_rgb(self):
         """Test the blue-first wire order is turned back into RGB.
@@ -912,18 +918,42 @@ class TestPyHatchBabyRestAsync:
         assert api.favorites[3]["volume"] == 84
 
     @pytest.mark.asyncio
-    async def test_refresh_favorite_records_a_name(self, api: PyHatchBabyRestAsync):
-        """Test the name notification that follows a block is kept."""
+    @pytest.mark.parametrize("header", [b"\x07", b"\x04", b"\x05", b"\x85"])
+    async def test_refresh_favorite_records_a_name(
+        self, api: PyHatchBabyRestAsync, header
+    ):
+        """Test a name is recognised whatever byte introduces it.
+
+        The notes give 0x07, but schedules on real devices answer with 0x04,
+        0x05 and 0x85, so the leading byte is no way to tell.
+        """
 
         async def answer(command):
             api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
-            api._list_notification_received(None, bytearray(b"\x07\x00Bedtime\x00"))
+            api._list_notification_received(None, bytearray(header + b"Bedtime\x00"))
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_favorite(2)
 
         assert api.favorites[2]["name"] == "Bedtime"
+
+    @pytest.mark.asyncio
+    async def test_refresh_schedule_records_a_name(self, api: PyHatchBabyRestAsync):
+        """Test a schedule's name is kept too, against its own slot."""
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            api._list_notification_received(
+                None, bytearray(b"\x85Weekday Sleep\x00\xff\xff")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_schedule(3)
+
+        assert api.schedules[3]["name"] == "Weekday Sleep"
+        assert api.favorites == {}
 
     @pytest.mark.asyncio
     async def test_refresh_favorite_gives_up_when_nothing_answers(
@@ -1290,7 +1320,7 @@ class TestPyHatchBabyRestAsync:
             schedule = await api.async_refresh_schedule(4)
 
         assert schedule is not None
-        assert api.schedules[4]["hour"] == 7
+        assert api.schedules[4]["volume"] == 40
         # And it did not end up filed as a favorite.
         assert api.favorites == {}
 

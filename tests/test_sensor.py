@@ -17,8 +17,8 @@ from custom_components.hatch_rest.sensor import (
 )
 
 SCHEDULE = {
-    "hour": 7,
-    "minute": 30,
+    "name": "Weekday Sleep",
+    "raw": "01d2029a670728071e000000007f2dd1fd003e40",
     "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
     "days_mask": 0x3E,
     "color": (253, 209, 45),
@@ -77,20 +77,28 @@ class TestHatchBabyRestScheduleSensor:
 
         assert len(ids) == SCHEDULE_SLOTS
 
-    def test_state_is_the_time_of_day(
+    def test_state_is_the_name_from_the_device(
         self, coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test the sensor reads as the time the schedule runs."""
-        assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "07:30"
+        """Test the sensor reads as the name the schedule was given.
 
-    def test_midnight_keeps_its_leading_zeros(
+        The time would be the obvious state, but where the device keeps it
+        is not known yet.
+        """
+        sensor = HatchBabyRestScheduleSensor(coordinator, 1)
+
+        assert sensor.native_value == "Weekday Sleep"
+
+    def test_a_slot_with_no_name_reads_as_unused(
         self, coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test a single digit hour or minute is padded."""
-        coordinator.hatch_rest_device.schedules[1]["hour"] = 0
-        coordinator.hatch_rest_device.schedules[1]["minute"] = 5
+        """Test an empty slot says so rather than reading as unknown.
 
-        assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "00:05"
+        Unknown is for a slot nobody has asked about, which is different.
+        """
+        del coordinator.hatch_rest_device.schedules[1]["name"]
+
+        assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "Unused"
 
     def test_unread_slot_is_unknown(self, coordinator: HatchBabyRestUpdateCoordinator):
         """Test a slot nobody has asked about reports nothing.
@@ -110,6 +118,7 @@ class TestHatchBabyRestScheduleSensor:
 
         assert attributes == {
             "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+            "raw": "01d2029a670728071e000000007f2dd1fd003e40",
             "color": (253, 209, 45),
             "brightness": 127,
             "sound": "rain",
@@ -124,14 +133,14 @@ class TestHatchBabyRestScheduleSensor:
     ):
         """Test the flags byte is reported, not just its reading.
 
-        Which bit means enabled is unsettled between 0x40 and 0x80, and a
-        disabled slot's raw byte is what will settle it.
+        Populated slots read 0xdf and empty ones 0x9f, which is what settled
+        the enabled bit as 0x40. Worth keeping visible.
         """
-        coordinator.hatch_rest_device.schedules[1]["flags"] = 0x80
+        coordinator.hatch_rest_device.schedules[1]["flags"] = 0x9F
 
         attributes = HatchBabyRestScheduleSensor(coordinator, 1).extra_state_attributes
 
-        assert attributes["flags"] == 0x80
+        assert attributes["flags"] == 0x9F
 
     def test_attributes_report_an_unnamed_sound_by_number(
         self, coordinator: HatchBabyRestUpdateCoordinator

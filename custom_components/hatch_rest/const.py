@@ -50,25 +50,25 @@ FAVORITE_RED_INDEX = 12
 FAVORITE_FLAGS_INDEX = 13
 FAVORITE_ENABLED_MASK = 0x80
 
-# Names arrive as their own notification, headed 0x07 and followed by ASCII.
-FAVORITE_NAME_HEADER = 0x07
-
 # How long to wait for a reply to a favorite command. Replies come back in
 # well under a second on a healthy link; this only bounds a lost one.
 LIST_REPLY_TIMEOUT_SECONDS = 3
 
 # A schedule comes back on CHAR_LIST as a 20 byte block sharing its header
 # with a favorite, and differing only in length:
-# [0x01] [modified LE x4] [sound] [volume] [hour] [minute] [00 x4]
-# [brightness] [B] [G] [R] [0x00] [days] [flags]
+# [0x01] [modified LE x4] [sound] [volume] [?] [?] [? x4]
+# [brightness] [B] [G] [R] [?] [days] [flags]
 # Colour is blue first here too.
+#
+# The notes put the hour at 7 and the minute at 8. Read from real slots those
+# hold 46:14, 238:182 and the like, so the time of day lives somewhere else --
+# probably among the bytes the notes call padding, which nothing has looked
+# at. The whole block is reported raw until it is worked out.
 SCHEDULE_SLOTS = 10
 SCHEDULE_BLOCK_LENGTH = 20
 SCHEDULE_MODIFIED_INDEX = 1
 SCHEDULE_SOUND_INDEX = 5
 SCHEDULE_VOLUME_INDEX = 6
-SCHEDULE_HOUR_INDEX = 7
-SCHEDULE_MINUTE_INDEX = 8
 SCHEDULE_BRIGHTNESS_INDEX = 13
 SCHEDULE_BLUE_INDEX = 14
 SCHEDULE_GREEN_INDEX = 15
@@ -76,10 +76,9 @@ SCHEDULE_RED_INDEX = 16
 SCHEDULE_DAYS_INDEX = 18
 SCHEDULE_FLAGS_INDEX = 19
 
-# Which bit of the flags byte means enabled is unsettled. The protocol notes
-# say 0x40 for a schedule but 0x80 for a favorite, and both are written as
-# 0xc0, which satisfies either -- so the two cannot be told apart from the
-# write side. The raw byte is reported alongside so a disabled slot settles it.
+# 0x40, settled against real slots: populated ones read 0xdf and an empty one
+# reads 0x9f, so 0x80 cannot be it -- that would call the empty slot enabled.
+# The notes were right, and differ from favorites, which use 0x80.
 SCHEDULE_ENABLED_MASK = 0x40
 
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.

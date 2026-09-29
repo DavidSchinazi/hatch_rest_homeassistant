@@ -41,7 +41,6 @@ from .const import (
     LIST_ACK,
     LIST_ACK_TIMEOUT_SECONDS,
     FAVORITE_MASK,
-    FAVORITE_NAME_HEADER,
     FAVORITE_RED_INDEX,
     LIST_REPLY_TIMEOUT_SECONDS,
     FAVORITE_SLOTS,
@@ -53,8 +52,6 @@ from .const import (
     SCHEDULE_ENABLED_MASK,
     SCHEDULE_FLAGS_INDEX,
     SCHEDULE_GREEN_INDEX,
-    SCHEDULE_HOUR_INDEX,
-    SCHEDULE_MINUTE_INDEX,
     SCHEDULE_MODIFIED_INDEX,
     SCHEDULE_RED_INDEX,
     SCHEDULE_SLOTS,
@@ -211,8 +208,6 @@ def _parse_schedule_block(data: bytes) -> dict:
     flags = data[SCHEDULE_FLAGS_INDEX]
 
     return {
-        "hour": data[SCHEDULE_HOUR_INDEX],
-        "minute": data[SCHEDULE_MINUTE_INDEX],
         "days": [name for bit, name in enumerate(SCHEDULE_DAYS) if days & (1 << bit)],
         "days_mask": days,
         "color": (
@@ -225,13 +220,16 @@ def _parse_schedule_block(data: bytes) -> dict:
         "sound_id": sound_id,
         "volume": data[SCHEDULE_VOLUME_INDEX],
         "enabled": bool(flags & SCHEDULE_ENABLED_MASK),
-        # Reported raw because which bit means enabled is not settled -- see
-        # SCHEDULE_ENABLED_MASK.
         "flags": flags,
-        # Purpose unconfirmed; looks like when the slot was last written.
+        # Looks like when the slot was last written: the ones seen so far sit
+        # on plausible dates, several on exact hours.
         "modified_timestamp": struct.unpack_from("<I", data, SCHEDULE_MODIFIED_INDEX)[
             0
         ],
+        # The time of day a schedule runs at has not been located yet, and the
+        # bytes the notes give for it hold something else. Carried whole so it
+        # can be worked out from real slots rather than guessed at.
+        "raw": bytes(data).hex(),
     }
 
 
@@ -364,18 +362,29 @@ class PyHatchBabyRestAsync:
         if data[0] == BLOCK_HEADER:
             self._handle_block(data)
 
-        elif data[0] == FAVORITE_NAME_HEADER:
-            name = self._parse_favorite_name(data)
-            slot = self._slot_in_flight
-            if not name or slot is None:
-                return
-
-            _LOGGER.debug("%s favorite %d is named %r", self.address, slot, name)
-            self.favorites.setdefault(slot, {})["name"] = name
-
         elif bytes(data) == LIST_ACK:
             _LOGGER.debug("%s acknowledged the command", self.address)
             self._resolve(self._ack_reply, None)
+
+        elif self._block_kind_in_flight is not None and (
+            name := self._parse_name_reply(data)
+        ):
+            store = (
+                self.favorites
+                if self._block_kind_in_flight == BLOCK_FAVORITE
+                else self.schedules
+            )
+            slot = self._slot_in_flight
+            if slot is None:
+                return
+            _LOGGER.debug(
+                "%s %s %d is named %r",
+                self.address,
+                self._block_kind_in_flight,
+                slot,
+                name,
+            )
+            store.setdefault(slot, {})["name"] = name
 
         elif self._text_reply is not None:
             text = bytes(data).decode("ascii", errors="ignore").strip()
@@ -436,16 +445,22 @@ class PyHatchBabyRestAsync:
         self._resolve(self._block_reply, parsed)
 
     @staticmethod
-    def _parse_favorite_name(data: bytes) -> str:
-        """Pull the ASCII name out of a name notification."""
-        start = 1
-        while start < len(data) and data[start] < 0x20:
-            start += 1
+    def _parse_name_reply(data: bytes) -> str | None:
+        """Pull a slot's name out of a notification, if that is what it is.
 
-        name = bytes(data[start:])
+        The leading byte varies -- 0x04, 0x05 and 0x85 have all turned up for
+        schedules, against the 0x07 the notes give for favorites -- so what
+        marks one of these is the printable text after it rather than the
+        byte itself.
+        """
+        name = bytes(data[1:])
         if 0x00 in name:
             name = name[: name.index(0x00)]
-        return name.decode("utf-8", errors="ignore").strip()
+
+        text = name.decode("ascii", errors="ignore").strip()
+        if not text or not text.isprintable():
+            return None
+        return text
 
     @staticmethod
     def _resolve(future: asyncio.Future | None, value) -> None:
