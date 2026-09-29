@@ -45,10 +45,36 @@ father, so no promises.
 
 ### 🔌 Switch
 * Master on/off power state of the device
+* One per favorite, for whether the device offers it when cycling favorites
+  on the touch ring
 
 ### 🟡 Light
 
 ### 🔊 Media Player
+
+### ⭐ Select
+* Which of the six stored favorites is playing. Selecting one plays it;
+  what each holds is exposed as attributes
+
+### 🔘 Button
+* One per favorite: saves whatever the device is playing into that slot
+
+## ⭐ Favorites
+
+The six favorites stored on the device can be read and rewritten from Home
+Assistant, so editing them no longer means shutting down the Bluetooth proxies
+to free the device up for the phone app.
+
+The usual way is the buttons: set the light and sound how you want them with
+the normal controls, then press **Save to Favorite N**. Two actions are
+available for automations:
+
+* `hatch_rest.save_favorite` — store what is playing now into a slot
+* `hatch_rest.set_favorite` — set a slot's colour, brightness, sound, volume
+  or enabled flag explicitly. Anything left out keeps its current value
+
+The wire protocol these rely on, and how much of it has been verified against
+real hardware, is written up in [PROTOCOL.md](PROTOCOL.md).
 
 ## 📡 Bluetooth Requirements
 
@@ -69,3 +95,8 @@ This integration uses BLE connections aggressively but cleanly:
 Issues and PRs are welcome!
 
 If you improve the async BLE API or add new services (timers, programs, gradients), feel free to submit a pull request.
+
+[PROTOCOL.md](PROTOCOL.md) describes the device's Bluetooth protocol and marks
+which parts have been confirmed against hardware and which are taken on trust
+from other people's reverse engineering. If you exercise a part that is still
+marked as inherited, that document is worth updating.
