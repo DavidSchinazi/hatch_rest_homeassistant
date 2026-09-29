@@ -1,19 +1,15 @@
 # Hatch Rest (1st generation) BLE protocol
 
-What this integration knows about talking to a Hatch Rest over Bluetooth, and — more to the
-point — **how much of it we have actually seen happen**.
+What this integration knows about talking to a Hatch Rest over Bluetooth, and which aspects of
+that have been confirmed by testing locally with hardware.
 
-The reverse engineering is not ours. It was done by [wmbest2][wmbest2] from btsnoop captures and
-published as a `PROTOCOL.md` there; the GATT layout is corroborated independently by
-[dgreif/homebridge-hatch-baby-rest][dgreif]. What this document adds is verification: every claim
-below is marked with whether we have confirmed it against real hardware, and how.
-
-That distinction matters because the two published sources agree with each other but neither
-states what was tested on what. Three of the claims we inherited turned out to be wrong for our
-devices.
-
-[wmbest2]: https://github.com/wmbest2/hatch_rest_homeassistant/blob/main/PROTOCOL.md
-[dgreif]: https://github.com/dgreif/homebridge-hatch-baby-rest
+The initial reverse engineering was done by wmbest2 from btsnoop captures and published as a
+[`PROTOCOL.md`](https://github.com/wmbest2/hatch_rest_homeassistant/blob/main/PROTOCOL.md).
+The GATT layout was corroborated independently by
+[dgreif/homebridge-hatch-baby-rest](https://github.com/dgreif/homebridge-hatch-baby-rest).
+What this document adds is verification: every claim below is marked with whether we have
+confirmed it against real hardware, because some of the data in these two published sources
+did not seem to work with our Hatch devices.
 
 ## What "confirmed" means here
 
