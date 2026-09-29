@@ -1,6 +1,7 @@
 """Tests for Hatch Rest API."""
 
 import asyncio
+import logging
 from collections.abc import Generator
 from datetime import datetime
 from time import monotonic
@@ -1853,7 +1854,8 @@ class TestPyHatchBabyRestAsync:
 
         Three of four devices here answer FF, which is what the protocol
         notes describe. The fourth answers 00, and reading that as a duration
-        would report a timer permanently sitting at zero.
+        would report a timer permanently sitting at zero. GD is asked either
+        way, and answers the same.
         """
         asked = []
 
@@ -1865,9 +1867,46 @@ class TestPyHatchBabyRestAsync:
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
-        assert asked == ["GI"]
+        assert asked == ["GI", "GD"]
         assert api.timer_remaining is None
         assert api.timer_total is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_timer_asks_gd_even_when_gi_says_none(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test GI saying FF does not stop the remaining time being read.
+
+        GI answered FF on a device whose app had a timer running.
+        """
+
+        async def answer(command):
+            api._list_notification_received(
+                None, bytearray(b"FF" if command == "GI" else b"00b5")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        assert api.timer_remaining == 181
+        assert api.timer_total is None
+
+    def test_feedback_is_logged_raw_when_more_than_the_clock_moves(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test the raw payload is logged on a real change, not every tick."""
+        caplog.set_level(logging.DEBUG)
+        payload = bytearray(bytes.fromhex("54f8001c9643fdd12d7f53055450df6500000000"))
+
+        api._notification_received(None, payload)
+        payload[1] = 0xF9  # the clock ticks
+        api._notification_received(None, payload)
+        payload[16] = 0xB5  # something after the power byte moves
+        api._notification_received(None, payload)
+
+        assert caplog.text.count("feedback changed") == 2
+        assert "65b5000000" in caplog.text
 
     @pytest.mark.asyncio
     async def test_refresh_timer_treats_nothing_left_as_no_timer(

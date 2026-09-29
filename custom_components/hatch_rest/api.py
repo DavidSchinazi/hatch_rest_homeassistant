@@ -279,6 +279,9 @@ class PyHatchBabyRestAsync:
         self._settle_until: float = 0.0
         self._commands_in_flight: int = 0
         self._last_state_update: float | None = None
+        # The last state payload, less the clock at its front, so a change in
+        # anything else can be logged raw without logging every second.
+        self._last_feedback: bytes | None = None
         self._keep_connected: bool = False
         self._reconnect_timer: asyncio.TimerHandle | None = None
         self._reconnect_task: asyncio.Task | None = None
@@ -555,6 +558,13 @@ class PyHatchBabyRestAsync:
 
     def _notification_received(self, characteristic, data: bytearray) -> None:
         """Handle a state update pushed over the connection."""
+        # Raw, when anything but the clock moved. Where the device reports a
+        # running sleep timer is still being looked for, and the block after
+        # the power byte -- 0x65 and four bytes, zero so far -- is a suspect.
+        if (rest := bytes(data[FEEDBACK_COLOR_INDEX:])) != self._last_feedback:
+            self._last_feedback = rest
+            _LOGGER.debug("%s feedback changed: %s", self.address, data.hex())
+
         if self._commands_in_flight:
             # The write has not been acknowledged yet, so this still
             # describes the state before it and would revert the entity.
@@ -1197,44 +1207,31 @@ class PyHatchBabyRestAsync:
     async def async_refresh_timer(self) -> None:
         """Ask the device about its sleep timer.
 
-        Two questions: whether one is running, and how much is left. Asked
-        once per connection, because the answer only moves one way and can be
-        counted down from here without pestering the device for it.
+        Two questions: GI, which the notes call the total, and GD, how much
+        is left. Asked once per connection, because the answer only moves one
+        way and can be counted down from here without pestering the device.
+
+        GD is asked whatever GI says. GI answered FF -- no timer -- on a
+        device whose app had a three hour timer running, so it cannot be
+        what decides whether there is one.
         """
         if not await self._list_exchange("GI", text=True):
             return
 
-        total = _parse_hex_reply(self._last_text)
-        if self._last_text == TIMER_NONE or not total:
-            # Some devices say FF for this and some say 00. Either way there
-            # is nothing to count down, and no point asking how much is left.
-            self._clear_timer()
-            _LOGGER.debug(
-                "%s has no sleep timer running (%r)", self.address, self._last_text
-            )
-            return
+        gi = self._last_text
+        total = _parse_hex_reply(gi)
+        self.timer_total = None if gi == TIMER_NONE or not total else total
 
-        # What the total means when a timer IS running has not been confirmed,
-        # so it is logged as it arrives rather than interpreted.
-        _LOGGER.debug(
-            "%s sleep timer total reported as %r", self.address, self._last_text
-        )
-        self.timer_total = total
+        answered = await self._list_exchange("GD", text=True)
+        gd = self._last_text if answered else None
+        _LOGGER.debug("%s timer: GI answered %r, GD %r", self.address, gi, gd)
 
-        if not await self._list_exchange("GD", text=True):
-            return
-
-        minutes = _parse_hex_reply(self._last_text)
-        if minutes is None:
-            _LOGGER.debug(
-                "%s gave %r for time remaining", self.address, self._last_text
-            )
-            return
-
+        # Minutes come as four hex digits. A shorter answer is not one: FF,
+        # the no-timer reply to GI, would otherwise read as 255 minutes.
+        minutes = _parse_hex_reply(gd) if gd is not None and len(gd) == 4 else None
         if not minutes:
-            # A timer with nothing left to run is one that is not running.
+            # Nothing left, or no answer that reads as minutes.
             self._clear_timer()
-            _LOGGER.debug("%s has no sleep timer left to run", self.address)
             return
 
         _LOGGER.debug("%s has %d minutes of sleep timer left", self.address, minutes)

@@ -68,10 +68,17 @@ advertisement   R  T  ..  ..  ..  ..  C  r  g  b  br  S  sn  vol  E  ..×5  P  p
 
 | Marker | Byte | Follows with |
 |---|---|---|
+| `T` | `0x54` | four bytes, the device's clock — see below |
 | `C` | `0x43` | red, green, blue, brightness |
 | `S` | `0x53` | sound id, volume |
 | `P` | `0x50` | the power byte |
-| `E` | `0x45` | five bytes, **Inherited** — purpose unknown, and zero in the one raw advertisement we captured |
+| `E` | `0x45` | five bytes, **Inherited** — purpose unknown, and zero in every raw advertisement we captured |
+| `e` | `0x65` | in the feedback, four bytes after the power byte, zero in every capture so far; in the advertisement, one byte. Purpose unknown — a suspect for the sleep timer |
+
+The `T` block is the device's clock, **confirmed**: a big-endian unix timestamp holding local wall
+clock read as UTC, the same convention as a program's start time. One advertisement logged at
+12:57:58 local carried `6abbb5d6`, which is 12:57:58 read that way. Devices whose clock has not
+been set carry small or meaningless values.
 
 Captured from one of our devices, both decoding to the same state:
 
@@ -385,7 +392,8 @@ byte read back `0x06` where it had been `0x04`. `ESL`'s `0x40` lands as `0x02` o
 not rewrite fields it was not sent. The slot is still read back after every write, and anything
 other than the status that moved is logged as a warning.
 
-Disabling from Home Assistant (`ESL80`) has not been exercised on a populated program yet.
+`ESL80` disables, confirmed the same way: Time to Rise went from `0x06` to `0x04`, the app agreed,
+and the block again read back unchanged. `ESF` answers with the slot number in ASCII each time.
 
 ### Names
 
