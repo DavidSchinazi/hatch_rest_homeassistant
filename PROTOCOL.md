@@ -230,6 +230,20 @@ not be wired for favorites at all.
 
 We keep the parsing in case some device sends it, and fall back to numbering the slots.
 
+## The clock
+
+`ST{YYYYMMDDHHmmss}U`, followed by the usual `OK`. **Confirmed** only as far as the
+acknowledgement goes: there is no command to read the clock back, so nothing can check what the
+device did with it beyond watching whether schedules fire on time.
+
+The device is told the **local wall clock with no zone**, which is the same convention its
+schedules use for their start times. Converting to UTC first would be converting to nothing.
+
+We send it at most once a day, when a device connects, and never between midnight and 02:30. In
+that window the local clock is ambiguous on the day the clocks go back and absent on the day they
+go forward, so a time sent then can be an hour out. jmnatzaganian's fork does the same, which is
+where the idea came from.
+
 ## Not investigated
 
 Present in the published sources, untouched here, and therefore entirely **Inherited**:
@@ -238,7 +252,6 @@ Present in the published sources, untouched here, and therefore entirely **Inher
 - Writing schedules — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
   schedule's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
 - Setting the sleep timer — `SD{ssss}`, in seconds.
-- Clock — `ST{YYYYMMDDHHmmss}U`.
 
 ## Schedules
 

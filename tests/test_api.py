@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Generator
+from datetime import datetime
 from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1357,6 +1358,129 @@ class TestPyHatchBabyRestAsync:
         assert api.schedules[4]["volume"] == 40
         # And it did not end up filed as a favorite.
         assert api.favorites == {}
+
+    @staticmethod
+    def _at(api: PyHatchBabyRestAsync, *when: int):
+        """Pretend it is a given local time, and record what is written.
+
+        Naive on purpose. A local wall clock with no zone is the thing under
+        test here, because it is what the device is told.
+        """
+        moment = datetime(*when)  # noqa: DTZ001
+        sent = []
+
+        async def answer(command):
+            sent.append(command)
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return (
+            sent,
+            answer,
+            patch(
+                "custom_components.hatch_rest.api.datetime",
+                **{"now.return_value": moment},
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_clock_sends_the_local_wall_clock(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the device is told the time with no zone attached.
+
+        Which is how it stores a schedule's start time, so converting would
+        be converting to nothing.
+        """
+        sent, answer, clock = self._at(api, 2026, 9, 29, 14, 5, 3)
+
+        with clock, patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_sync_clock()
+
+        assert sent == ["ST20260929140503U"]
+
+    @pytest.mark.asyncio
+    async def test_sync_clock_happens_once_a_day(self, api: PyHatchBabyRestAsync):
+        """Test a device already told today is not told again."""
+        sent, answer, clock = self._at(api, 2026, 9, 29, 14, 5, 3)
+
+        with clock, patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_sync_clock()
+            await api.async_sync_clock()
+
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
+    async def test_sync_clock_waits_out_the_small_hours(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test nothing is sent between midnight and half past two.
+
+        In that window the local clock is ambiguous on the day the clocks go
+        back and absent on the day they go forward, so a time sent then can
+        be an hour out.
+        """
+        sent, answer, clock = self._at(api, 2026, 10, 25, 2, 29, 59)
+
+        with clock, patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_sync_clock()
+
+        assert sent == []
+        assert api._clock_synced_on is None
+
+    @pytest.mark.asyncio
+    async def test_sync_clock_resumes_after_half_past_two(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the wait is over on the minute rather than the hour."""
+        sent, answer, clock = self._at(api, 2026, 10, 25, 2, 30, 0)
+
+        with clock, patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_sync_clock()
+
+        assert sent == ["ST20261025023000U"]
+
+    @pytest.mark.asyncio
+    async def test_sync_clock_retries_if_it_was_not_acknowledged(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test an unacknowledged clock is not counted as set.
+
+        There is no command to read the clock back, so the acknowledgement is
+        the only confirmation there is.
+        """
+        _, _, clock = self._at(api, 2026, 9, 29, 14, 5, 3)
+
+        with (
+            clock,
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+        ):
+            await api.async_sync_clock()
+
+        assert api._clock_synced_on is None
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_sets_the_clock_before_reading(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the clock is set as part of connecting, ahead of the reads."""
+        asked = []
+
+        async def answer(command):
+            asked.append(command)
+            if command.startswith("PGB"):
+                api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+            elif command.startswith("EGB"):
+                api._list_notification_received(None, bytearray(SCHEDULE_BLOCK))
+            elif command in ("GI", "GD"):
+                api._list_notification_received(None, bytearray(b"FF"))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        _, _, clock = self._at(api, 2026, 9, 29, 14, 5, 3)
+        with clock, patch.object(api, "_write_list_command", side_effect=answer):
+            await api._sweep()
+
+        assert asked[0] == "ST20260929140503U"
 
     @pytest.mark.asyncio
     async def test_reading_a_block_tells_home_assistant(

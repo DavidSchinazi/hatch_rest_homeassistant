@@ -101,6 +101,16 @@ SCHEDULE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 # total or a remainder of zero means the same thing: nothing is running.
 TIMER_NONE = "FF"
 
+# Schedules fire off the device's own clock, which nothing else sets. It is
+# told the local wall clock, with no zone, the same way it stores a schedule's
+# start time.
+#
+# Not before half past two in the morning. Between two and three the local
+# clock is ambiguous on the day the clocks go back and absent on the day they
+# go forward, so a time sent then can be an hour out. Waiting costs nothing --
+# this happens at most once a day and only matters to the minute.
+CLOCK_SYNC_EARLIEST = (2, 30)
+
 # Both kinds of block share the 0x01 header, so which one a reply is can only
 # be known from what was asked for.
 BLOCK_FAVORITE = "favorite"

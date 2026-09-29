@@ -8,7 +8,7 @@ https://github.com/kjoconnor/pyhatchbabyrest/blob/master/LICENSE
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 import logging
 import math
 import struct
@@ -26,6 +26,7 @@ from bleak_retry_connector import (
 
 from .const import (
     ADVERTISEMENT_COLOR_INDEX,
+    CLOCK_SYNC_EARLIEST,
     BLOCK_FAVORITE,
     BLOCK_SCHEDULE,
     CHAR_LIST,
@@ -281,6 +282,9 @@ class PyHatchBabyRestAsync:
         # for repeatedly -- it only ever runs one way.
         self.timer_total: int | None = None
         self._timer_expires_at: float | None = None
+
+        # The last date the device was told what time it is.
+        self._clock_synced_on: date | None = None
         # CHAR_LIST carries no request id, so replies are matched to requests
         # by only ever having one outstanding.
         self._list_lock = asyncio.Lock()
@@ -851,7 +855,8 @@ class PyHatchBabyRestAsync:
         self._sweep_task = asyncio.create_task(self._sweep())
 
     async def _sweep(self) -> None:
-        """Read everything the device stores."""
+        """Set the clock if it is due, then read everything the device stores."""
+        await self.async_sync_clock()
         await self.async_refresh_favorites()
         await self.async_refresh_schedules()
         await self.async_refresh_timer()
@@ -1000,6 +1005,37 @@ class PyHatchBabyRestAsync:
         await self.set_active_favorite(slot)
 
         return written
+
+    async def async_sync_clock(self) -> None:
+        """Tell the device what time it is, if it has not been told today.
+
+        Its schedules run off its own clock and nothing else sets it, so
+        without this they drift away from the times they are set to.
+
+        The device is told the local wall clock with no zone, which is how it
+        stores a schedule's start time too. There is no command to read the
+        clock back, so the acknowledgement is the only confirmation there is.
+        """
+        # Local wall clock is exactly what is wanted here: the device keeps no
+        # zone, and converting would be converting to nothing.
+        now = datetime.now()  # noqa: DTZ005
+
+        if self._clock_synced_on == now.date():
+            return
+
+        if (now.hour, now.minute) < CLOCK_SYNC_EARLIEST:
+            _LOGGER.debug(
+                "%s not setting the clock before %02d:%02d",
+                self.address,
+                *CLOCK_SYNC_EARLIEST,
+            )
+            return
+
+        _LOGGER.debug("%s setting the clock to %s", self.address, now)
+        if await self._list_exchange(f"ST{now:%Y%m%d%H%M%S}U"):
+            self._clock_synced_on = now.date()
+        else:
+            _LOGGER.warning("%s did not accept the clock", self.address)
 
     @property
     def timer_remaining(self) -> int | None:
