@@ -250,14 +250,41 @@ A schedule fed to the favorite parser does not fail — it returns a plausible f
 from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
 
 ```
-[0x01] [modified LE ×4] [sound] [volume] [?] [?] [? ×4] [brightness] [B] [G] [R] [?] [days] [flags]
-   0          1-4           5        6     7   8   9-12       13      14  15  16  17    18     19
+[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×4] [brightness] [B] [G] [R] [00] [days] [flags]
+   0         1-4         5        6          7-8          9-12       13      14  15  16   17    18     19
 ```
 
-**Confirmed** in that layout: the sound and volume, the brightness, the colour (blue first, as in
-a favorite), and the days. Days is a bitmask with bit 0 = Sunday; real slots read 0x3e for
-weekdays, 0x60 for the weekend, 0x00 for an empty slot. The colour is what carried it — an "Ok to
-Wake" schedule decodes green.
+**Confirmed**: sound, volume, brightness, colour (blue first, as in a favorite), and days. Days is
+a bitmask with bit 0 = Sunday; real slots read 0x3e for weekdays, 0x60 for the weekend, 0x00 for
+an empty slot. Two things carried it: an "Ok to Wake" schedule decodes green, and a schedule its
+owner had named "Tuesday Morning" has its bitmask set to exactly 0x04.
+
+### The start time and duration — **Contradicted**
+
+Both sources call bytes 1-4 a modified timestamp and put the hour at byte 7 and the minute at byte
+8. Read from real slots that gives 46:14, 238:182 and 254:196, and the disabled slots all read
+46:14, which is simply the unset value.
+
+Bytes 1-4 are the **start time**: a unix timestamp whose time of day, read **as UTC**, is the local
+time the schedule runs at. The device writes local wall clock into a timestamp-shaped field with no
+zone, so reading it as UTC rather than converting is what makes it right — and what makes it immune
+to daylight saving. The date half is when the slot was last written.
+
+Bytes 7-8 are the **duration in seconds**, little endian.
+
+Confirmed across 21 populated slots on four devices, every one of which then reads sensibly against
+the name its owner gave it:
+
+```
+Weekday Wakeup    07:00  for 1h00m   Mon,Wed,Thu,Fri
+Tuesday Morning   06:45  for 1h00m   Tue
+Playtime Week     08:00  for 0h10m   Mon-Fri
+Nap Time          13:00  for 2h00m   every day
+Bed Time          19:00  for 12h00m  every day
+Weekend Sleep     19:00  for 12h30m  Fri,Sat
+```
+
+Every duration seen ends in a spare 30 seconds, which is presumably how the app writes them.
 
 `flags & 0x40` is enabled — **confirmed**, and worth stating because the notes give `0x80` for a
 favorite and `0x40` for a schedule while both are written as `0xc0`, so the write side cannot tell
@@ -290,3 +317,5 @@ check — its README links to reverse-engineering notes that were never committe
 | Schedule names | sent as `0x07` blocks | sent headed `0x04`, `0x05` or `0x85` |
 | Schedule hour/minute | bytes 7 and 8 | those hold something else; time not located |
 | Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |
+| Schedule bytes 1-4 | a modified timestamp | the start time, read as UTC |
+| Schedule bytes 7-8 | the hour and minute | the duration, in seconds |

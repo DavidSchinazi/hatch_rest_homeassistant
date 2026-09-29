@@ -18,7 +18,9 @@ from custom_components.hatch_rest.sensor import (
 
 SCHEDULE = {
     "name": "Weekday Sleep",
-    "raw": "01d2029a670728071e000000007f2dd1fd003e40",
+    "time": "07:30",
+    "duration_seconds": 3600,
+    "raw": "01f80db2650728100e000000007f2dd1fd003e40",
     "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
     "days_mask": 0x3E,
     "color": (253, 209, 45),
@@ -77,28 +79,17 @@ class TestHatchBabyRestScheduleSensor:
 
         assert len(ids) == SCHEDULE_SLOTS
 
-    def test_state_is_the_name_from_the_device(
+    def test_state_is_the_time_of_day(
         self, coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test the sensor reads as the name the schedule was given.
+        """Test the sensor reads as the time the schedule runs at."""
+        assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "07:30"
 
-        The time would be the obvious state, but where the device keeps it
-        is not known yet.
-        """
-        sensor = HatchBabyRestScheduleSensor(coordinator, 1)
+    def test_the_name_rides_along(self, coordinator: HatchBabyRestUpdateCoordinator):
+        """Test the name the device gave the schedule is exposed."""
+        attributes = HatchBabyRestScheduleSensor(coordinator, 1).extra_state_attributes
 
-        assert sensor.native_value == "Weekday Sleep"
-
-    def test_a_slot_with_no_name_reads_as_unused(
-        self, coordinator: HatchBabyRestUpdateCoordinator
-    ):
-        """Test an empty slot says so rather than reading as unknown.
-
-        Unknown is for a slot nobody has asked about, which is different.
-        """
-        del coordinator.hatch_rest_device.schedules[1]["name"]
-
-        assert HatchBabyRestScheduleSensor(coordinator, 1).native_value == "Unused"
+        assert attributes["name"] == "Weekday Sleep"
 
     def test_unread_slot_is_unknown(self, coordinator: HatchBabyRestUpdateCoordinator):
         """Test a slot nobody has asked about reports nothing.
@@ -117,8 +108,10 @@ class TestHatchBabyRestScheduleSensor:
         attributes = HatchBabyRestScheduleSensor(coordinator, 1).extra_state_attributes
 
         assert attributes == {
+            "name": "Weekday Sleep",
             "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-            "raw": "01d2029a670728071e000000007f2dd1fd003e40",
+            "duration_seconds": 3600,
+            "raw": "01f80db2650728100e000000007f2dd1fd003e40",
             "color": (253, 209, 45),
             "brightness": 127,
             "sound": "rain",

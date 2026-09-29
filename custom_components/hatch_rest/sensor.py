@@ -94,11 +94,7 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
 
     @property
     def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the name the schedule was given on the device.
-
-        The time of day would be the obvious thing to report, but where the
-        device keeps it is not yet known -- see the raw attribute. The name
-        is real, and enough to tell one slot from another.
+        """Return the time of day this schedule runs at.
 
         None until the slot has been read, which is not the same as a slot
         with nothing in it.
@@ -106,7 +102,7 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
         schedule = self._schedule
         if schedule is None:
             return None
-        return schedule.get("name") or "Unused"
+        return schedule["time"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -116,9 +112,12 @@ class HatchBabyRestScheduleSensor(HatchBabyRestEntity, SensorEntity):  # pyright
             return {}
 
         return {
+            "name": schedule.get("name"),
             "days": schedule["days"],
-            # The whole block, because the time of day is in here somewhere
-            # and the bytes the protocol notes point at hold something else.
+            "duration_seconds": schedule["duration_seconds"],
+            # Kept because the layout here was worked out from real slots
+            # against two published sources that had it wrong, and the bytes
+            # nothing has accounted for are still in it.
             "raw": schedule["raw"],
             "color": schedule["color"],
             "brightness": schedule["brightness"],

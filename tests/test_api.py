@@ -201,35 +201,69 @@ class TestParseFavoriteBlock:
 #  [01][modified LE x4][snd][vol][hr][min][00 x4][bri][B][G][R][00][days][flags]
 SCHEDULE_BLOCK = bytes.fromhex(
     "01"  # header
-    "d2029a67"  # modified, little endian
+    "f80db265"  # start, little endian: a timestamp reading 07:30 as UTC
     "07"  # sound: rain
     "28"  # volume 40
-    "07"  # hour
-    "1e"  # minute 30
+    "100e"  # duration, little endian: 3600 seconds
     "00000000"
     "7f"  # brightness 127
     "2dd1fd"  # colour, blue first: (253, 209, 45)
     "00"
     "3e"  # days: Mon-Fri
-    "40"  # flags
+    "40"  # flags: enabled
 )
 
 
 class TestParseScheduleBlock:
     """Tests for the 20-byte block returned by EGB."""
 
+    def test_reads_the_time_from_the_start_value(self):
+        """Test the start time comes out of bytes 1-4, read as UTC.
+
+        Both published sources call that field a modified timestamp and put
+        the time in bytes 7-8. Those hold the duration, and reading them as a
+        time gives things like 46:14.
+        """
+        schedule = _parse_schedule_block(SCHEDULE_BLOCK)
+
+        assert schedule["time"] == "07:30"
+
+    def test_the_time_does_not_move_with_the_local_zone(self):
+        """Test the start value is read as UTC rather than converted.
+
+        The device writes local wall clock into a field shaped like a unix
+        timestamp, with no zone. Converting it would shift every schedule by
+        the offset, and twice a year by an hour more.
+        """
+        import os
+        import time
+
+        was = os.environ.get("TZ")
+        try:
+            for zone in ("UTC", "America/Los_Angeles", "Australia/Sydney"):
+                os.environ["TZ"] = zone
+                time.tzset()
+                assert _parse_schedule_block(SCHEDULE_BLOCK)["time"] == "07:30", zone
+        finally:
+            if was is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was
+            time.tzset()
+
+    def test_reads_how_long_it_runs_for(self):
+        """Test the duration comes out of bytes 7-8."""
+        assert _parse_schedule_block(SCHEDULE_BLOCK)["duration_seconds"] == 3600
+
     def test_keeps_the_block_whole(self):
         """Test the raw bytes are carried through.
 
-        Where the device keeps the time of day is not known -- the bytes the
-        notes point at hold something else entirely on real slots -- so the
-        block is reported as it arrived rather than partly interpreted.
+        This layout was worked out from real slots against two sources that
+        had it wrong, and some bytes are still unaccounted for.
         """
         schedule = _parse_schedule_block(SCHEDULE_BLOCK)
 
         assert schedule["raw"] == SCHEDULE_BLOCK.hex()
-        assert "hour" not in schedule
-        assert "minute" not in schedule
 
     def test_reads_colour_as_rgb(self):
         """Test the blue-first wire order is turned back into RGB.

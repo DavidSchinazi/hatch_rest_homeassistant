@@ -52,10 +52,11 @@ from .const import (
     SCHEDULE_ENABLED_MASK,
     SCHEDULE_FLAGS_INDEX,
     SCHEDULE_GREEN_INDEX,
-    SCHEDULE_MODIFIED_INDEX,
+    SCHEDULE_DURATION_INDEX,
     SCHEDULE_RED_INDEX,
     SCHEDULE_SLOTS,
     SCHEDULE_SOUND_INDEX,
+    SCHEDULE_START_INDEX,
     SCHEDULE_VOLUME_INDEX,
     TIMER_NONE,
     FAVORITE_SOUND_INDEX,
@@ -207,7 +208,16 @@ def _parse_schedule_block(data: bytes) -> dict:
     days = data[SCHEDULE_DAYS_INDEX]
     flags = data[SCHEDULE_FLAGS_INDEX]
 
+    # The stored value is a whole unix timestamp, but only its time of day
+    # matters, and only read as UTC -- the device writes local wall clock into
+    # it without a zone. Taking the remainder rather than building a datetime
+    # keeps any timezone out of it, daylight saving included.
+    start = struct.unpack_from("<I", data, SCHEDULE_START_INDEX)[0]
+    hour, minute = divmod(start % 86400 // 60, 60)
+
     return {
+        "time": f"{hour:02d}:{minute:02d}",
+        "duration_seconds": struct.unpack_from("<H", data, SCHEDULE_DURATION_INDEX)[0],
         "days": [name for bit, name in enumerate(SCHEDULE_DAYS) if days & (1 << bit)],
         "days_mask": days,
         "color": (
@@ -221,14 +231,9 @@ def _parse_schedule_block(data: bytes) -> dict:
         "volume": data[SCHEDULE_VOLUME_INDEX],
         "enabled": bool(flags & SCHEDULE_ENABLED_MASK),
         "flags": flags,
-        # Looks like when the slot was last written: the ones seen so far sit
-        # on plausible dates, several on exact hours.
-        "modified_timestamp": struct.unpack_from("<I", data, SCHEDULE_MODIFIED_INDEX)[
-            0
-        ],
-        # The time of day a schedule runs at has not been located yet, and the
-        # bytes the notes give for it hold something else. Carried whole so it
-        # can be worked out from real slots rather than guessed at.
+        # The date half of the start value, which is when the slot was last
+        # written rather than anything the schedule does.
+        "written_timestamp": start,
         "raw": bytes(data).hex(),
     }
 

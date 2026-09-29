@@ -56,17 +56,25 @@ LIST_REPLY_TIMEOUT_SECONDS = 3
 
 # A schedule comes back on CHAR_LIST as a 20 byte block sharing its header
 # with a favorite, and differing only in length:
-# [0x01] [modified LE x4] [sound] [volume] [?] [?] [? x4]
-# [brightness] [B] [G] [R] [?] [days] [flags]
+# [0x01] [start LE x4] [sound] [volume] [duration LE x2] [00 x4]
+# [brightness] [B] [G] [R] [00] [days] [flags]
 # Colour is blue first here too.
 #
-# The notes put the hour at 7 and the minute at 8. Read from real slots those
-# hold 46:14, 238:182 and the like, so the time of day lives somewhere else --
-# probably among the bytes the notes call padding, which nothing has looked
-# at. The whole block is reported raw until it is worked out.
+# Both published sources have the middle of this wrong. They call bytes 1-4 a
+# modified timestamp and bytes 7-8 the hour and minute; read from real slots
+# those give times like 46:14 and 238:182, which are not times at all.
+#
+# What bytes 1-4 actually hold is the start time, as a unix timestamp whose
+# time of day read *as UTC* is the local time the schedule runs at. The date
+# part is when the slot was written. Reading it as UTC rather than converting
+# is what makes it right, and also what makes it immune to daylight saving.
+#
+# Bytes 7-8 are how long it runs for, in seconds. Every duration seen ends in
+# a spare 30 seconds, which is presumably how the app writes them.
+SCHEDULE_START_INDEX = 1
+SCHEDULE_DURATION_INDEX = 7
 SCHEDULE_SLOTS = 10
 SCHEDULE_BLOCK_LENGTH = 20
-SCHEDULE_MODIFIED_INDEX = 1
 SCHEDULE_SOUND_INDEX = 5
 SCHEDULE_VOLUME_INDEX = 6
 SCHEDULE_BRIGHTNESS_INDEX = 13
