@@ -15,6 +15,7 @@ from custom_components.hatch_rest.api import (
     PyHatchBabyRestAsync,
     _assert_marker,
     _build_favorite_commands,
+    _build_program_enabled_commands,
     _parse_favorite_block,
     _parse_program_block,
     _parse_state,
@@ -395,6 +396,35 @@ class TestBuildFavoriteCommands:
         # The colour bytes in the block, read straight off the wire.
         assert FAVORITE_BLOCK[12:9:-1].hex() == "fdd12d"
         assert commands[1] == "PSCfdd12d7f"
+
+
+class TestBuildProgramEnabledCommands:
+    """Tests for the sequence that turns a stored program on or off."""
+
+    def test_sequence_and_order(self):
+        """Test select, flags, commit -- in that order."""
+        assert _build_program_enabled_commands(3, 0x9F, enabled=True) == [
+            "ESB03",
+            "ESLdf",
+            "ESF",
+        ]
+
+    def test_disabling_clears_only_the_enabled_bit(self):
+        """Test the unidentified low bits survive.
+
+        Real slots read 0xdf and 0x9f, so those are what should go back --
+        not the c0 and 80 the notes write, which would zero bits nobody
+        understands.
+        """
+        assert _build_program_enabled_commands(1, 0xDF, enabled=False)[1] == "ESL9f"
+
+    def test_already_in_the_asked_state_is_written_unchanged(self):
+        """Test asking for what the slot already holds changes nothing."""
+        assert _build_program_enabled_commands(1, 0xDF, enabled=True)[1] == "ESLdf"
+
+    def test_slot_ten_goes_out_as_egb_sends_it(self):
+        """Test the slot is uppercase hex, the form known to reach slot 10."""
+        assert _build_program_enabled_commands(10, 0xDF, enabled=False)[0] == "ESB0A"
 
 
 class TestPyHatchBabyRestAsync:
@@ -1375,6 +1405,121 @@ class TestPyHatchBabyRestAsync:
         assert api.programs[4]["volume"] == 40
         # And it did not end up filed as a favorite.
         assert api.favorites == {}
+
+    @staticmethod
+    def _program_answers(api: PyHatchBabyRestAsync, block: bytes = PROGRAM_BLOCK):
+        """Return a stand-in device that answers program commands.
+
+        It keeps the flags it is sent, so reading the slot back shows them.
+        """
+        sent = []
+        stored = bytearray(block)
+
+        async def answer(command):
+            sent.append(command)
+            if command.startswith("ESL"):
+                stored[19] = int(command[3:], 16)
+            if command.startswith("EGB"):
+                api._list_notification_received(None, bytearray(stored))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return sent, answer
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_reads_the_slot_first(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test an unread slot is fetched, flipped, committed and read back."""
+        sent, answer = self._program_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            written = await api.async_set_program_enabled(4, False)
+
+        assert sent == ["EGB04", "ESB04", "ESL00", "ESF", "EGB04"]
+        assert written is not None
+        assert written["enabled"] is False
+        assert api.programs[4]["enabled"] is False
+        assert "did not take" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_uses_a_slot_already_read(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a slot already read is not asked about again before writing."""
+        block = bytearray(PROGRAM_BLOCK)
+        block[19] = 0x9F
+        api.programs[2] = _parse_program_block(block)
+        sent, answer = self._program_answers(api, bytes(block))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_program_enabled(2, True)
+
+        assert sent == ["ESB02", "ESLdf", "ESF", "EGB02"]
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_warns_when_the_slot_did_not_take(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a program that reads back unchanged is reported."""
+
+        async def answer(command):
+            if command.startswith("EGB"):
+                # Ignores the write and keeps answering with the original.
+                api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_program_enabled(1, False)
+
+        assert "program 1 did not take what was asked for" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_stops_at_an_unacknowledged_command(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a lost select is not followed by a commit to another slot."""
+        sent = []
+
+        async def answer(command):
+            sent.append(command)
+            if command.startswith("EGB"):
+                api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+            if command.startswith("ESB"):
+                return
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+            pytest.raises(HatchRestConnectionError, match="did not acknowledge ESB"),
+        ):
+            await api.async_set_program_enabled(1, False)
+
+        assert "ESF" not in sent
+
+    @pytest.mark.asyncio
+    async def test_set_program_enabled_refuses_a_slot_it_cannot_read(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a slot known only by name is not written blind."""
+        api.programs[5] = {"name": "Nap Time"}
+
+        with (
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_REPLY_TIMEOUT_SECONDS", 0.01),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+            pytest.raises(HatchRestConnectionError, match="program 5"),
+        ):
+            await api.async_set_program_enabled(5, True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("slot", [0, 11, -1])
+    async def test_set_program_enabled_rejects_a_slot_out_of_range(
+        self, api: PyHatchBabyRestAsync, slot
+    ):
+        """Test only the ten real slots are accepted."""
+        with pytest.raises(ValueError, match="not between"):
+            await api.async_set_program_enabled(slot, True)
 
     @staticmethod
     def _at(api: PyHatchBabyRestAsync, *when: int):

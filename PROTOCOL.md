@@ -270,8 +270,9 @@ where the idea came from.
 Present in the published sources, untouched here, and therefore entirely **Inherited**:
 
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
-- Writing programs — `ESB`/`ESL`/`ESF` toggle one on or off, but nothing documents how to set a
-  program's time, sound, colour or days. jmnatzaganian's fork only toggles them too.
+- Writing programs — nothing documents how to set a program's time, sound, colour or days.
+  jmnatzaganian's fork only toggles them, as this integration now does (see
+  [Enabling and disabling](#enabling-and-disabling--inherited)).
 
 ## Programs
 
@@ -347,6 +348,23 @@ cannot be the enabled bit, and `0x40` can.
 238:182 and 254:196 there. Those bytes are zero on empty slots, so they are program data of some
 kind, but they are not the time of day. Where the device actually keeps it is **unknown** —
 possibly among bytes 9–12, which the notes call padding and nobody has looked at.
+
+### Enabling and disabling — **Inherited**
+
+```
+ESB{NN}     select the slot to write, uppercase hex as EGB takes it
+ESL{ff}     flags
+ESF         commit
+```
+
+The notes give `c0` for enabled and `80` for disabled. Real slots read `0xdf` and `0x9f`, so the
+integration instead reads the slot, flips only `0x40`, and writes the rest of the byte back as it
+was — which produces the two values actually observed, rather than zeroing bits nobody has
+identified.
+
+**Unconfirmed**: whether `ESF` commits only the flags, or — as `PSF` does for a favorite — every
+field the device has collected. The slot is read back after every write and any field other than
+the flags that moved is logged as a warning.
 
 ### Names
 

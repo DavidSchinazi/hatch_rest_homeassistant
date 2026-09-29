@@ -96,6 +96,20 @@ PROGRAM_FLAGS_INDEX = 19
 # The notes were right, and differ from favorites, which use 0x80.
 PROGRAM_ENABLED_MASK = 0x40
 
+# The fields a program keeps when only its enabled bit is flipped. The start
+# timestamp is left out: its date half moves on its own when a slot is
+# written, and only its time of day -- already covered by "time" -- matters.
+PROGRAM_CONTENT_FIELDS = (
+    "time",
+    "duration_seconds",
+    "days_mask",
+    "color",
+    "brightness",
+    "sound_id",
+    "volume",
+    "toddler_lock",
+)
+
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
 PROGRAM_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 

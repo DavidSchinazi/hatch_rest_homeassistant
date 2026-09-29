@@ -1,6 +1,7 @@
 """Hatch Rest switch."""
 
 import logging
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -8,7 +9,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import FAVORITE_SLOTS
+from .const import FAVORITE_SLOTS, PROGRAM_SLOTS
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,6 +31,10 @@ async def async_setup_entry(
             *(
                 HatchBabyRestFavoriteEnabledSwitch(coordinator, slot)
                 for slot in range(1, FAVORITE_SLOTS + 1)
+            ),
+            *(
+                HatchBabyRestProgramSwitch(coordinator, slot)
+                for slot in range(1, PROGRAM_SLOTS + 1)
             ),
         ],
         update_before_add=False,
@@ -111,3 +116,104 @@ class HatchBabyRestFavoriteEnabledSwitch(HatchBabyRestEntity, SwitchEntity):  # 
         """Stop offering this favorite on the device."""
         _LOGGER.debug("switch disabling favorite %d", self._slot)
         await self._hatch_rest_device.async_set_favorite(self._slot, enabled=False)
+
+
+class HatchBabyRestProgramSwitch(HatchBabyRestEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Whether one of the device's stored programs runs.
+
+    Only the enabled flag can be changed. The commands that write a program's
+    time, sound, colour or days are not documented anywhere we can check, so
+    the rest of what the slot holds is reported and left alone.
+    """
+
+    # These configure the device rather than operate it.
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator, slot: int) -> None:
+        """Initialize the switch for one slot."""
+        super().__init__(coordinator)
+        self._slot = slot
+        # The same id the program sensors had, which is free to reuse: unique
+        # ids only have to be unique within a platform.
+        self._attr_unique_id = f"{coordinator.unique_id}_program_{slot}"
+
+    @property
+    def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the name of the entity.
+
+        With the name the program was given on the device when there is one,
+        since that says what it is for where "Program 3" does not. The entity
+        id is fixed on first registration, so it does not move with this.
+        """
+        if not self._hatch_rest_device.name:
+            return None
+        name = f"{self._hatch_rest_device.name.title()} Program {self._slot}"
+        program = self._hatch_rest_device.programs.get(self._slot)
+        if program is not None and program.get("name"):
+            name = f"{name} ({program['name']})"
+        return name
+
+    @property
+    def _program(self) -> dict | None:
+        """Return this slot's contents, if its block has been read.
+
+        A slot can hold nothing but a name. Names arrive as their own
+        notification, so one can land before the block it belongs to, or
+        without it at all if the block never parses.
+        """
+        program = self._hatch_rest_device.programs.get(self._slot)
+        if program is None or "time" not in program:
+            return None
+        return program
+
+    @property
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return whether this program is enabled.
+
+        None until the slot has been read, which is not the same as off.
+        """
+        program = self._program
+        if program is None:
+            return None
+        return program["enabled"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the rest of what the program holds."""
+        program = self._program
+        if program is None:
+            return {}
+
+        return {
+            "name": program.get("name"),
+            "time": program["time"],
+            "days": program["days"],
+            "duration_seconds": program["duration_seconds"],
+            # Kept because the layout here was worked out from real slots
+            # against two published sources that had it wrong, and the bytes
+            # nothing has accounted for are still in it.
+            "raw": program["raw"],
+            "color": program["color"],
+            "brightness": program["brightness"],
+            "sound": (
+                program["sound"].name
+                if program["sound"] is not None
+                else program["sound_id"]
+            ),
+            "volume": program["volume"],
+            "toddler_lock": program["toddler_lock"],
+            # The bits other than enabled are unidentified, and are written
+            # back as they are whenever the switch is flipped.
+            "flags": program["flags"],
+            "start_timestamp": program["start_timestamp"],
+        }
+
+    async def async_turn_on(self, **_):
+        """Enable this program on the device."""
+        _LOGGER.debug("switch enabling program %d", self._slot)
+        await self._hatch_rest_device.async_set_program_enabled(self._slot, True)
+
+    async def async_turn_off(self, **_):
+        """Disable this program on the device."""
+        _LOGGER.debug("switch disabling program %d", self._slot)
+        await self._hatch_rest_device.async_set_program_enabled(self._slot, False)

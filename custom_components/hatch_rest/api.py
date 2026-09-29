@@ -48,6 +48,7 @@ from .const import (
     PROGRAM_BLOCK_LENGTH,
     PROGRAM_BLUE_INDEX,
     PROGRAM_BRIGHTNESS_INDEX,
+    PROGRAM_CONTENT_FIELDS,
     PROGRAM_DAYS,
     PROGRAM_DAYS_INDEX,
     PROGRAM_ENABLED_MASK,
@@ -182,6 +183,25 @@ def _build_favorite_commands(
     ]
 
 
+def _build_program_enabled_commands(slot: int, flags: int, enabled: bool) -> list[str]:
+    """Build the sequence that turns one stored program on or off.
+
+    The notes write the flags as c0 or 80, but real slots read 0xdf and 0x9f:
+    the low bits hold something nobody has identified. Flipping only the
+    enabled bit of what the slot already holds keeps them, and produces the
+    two values actually seen on devices rather than one never observed.
+
+    The slot goes out in uppercase hex, as EGB does -- that is the form known
+    to reach slot 10.
+    """
+    if enabled:
+        flags |= PROGRAM_ENABLED_MASK
+    else:
+        flags &= ~PROGRAM_ENABLED_MASK
+
+    return [f"ESB{slot:02X}", f"ESL{flags:02x}", "ESF"]
+
+
 def _parse_hex_reply(text: str | None) -> int | None:
     """Read one of the short ASCII hex answers, or None if it is not one."""
     try:
@@ -280,7 +300,8 @@ class PyHatchBabyRestAsync:
         # Stored favorites, by slot number. Populated by asking the device;
         # empty until it has answered.
         self.favorites: dict[int, dict] = {}
-        # Stored programs, by slot number. Read only for now.
+        # Stored programs, by slot number. Only whether each is enabled can be
+        # changed; nothing documents how to write the rest.
         self.programs: dict[int, dict] = {}
 
         # The sleep timer, as the device last reported it. Read once per
@@ -892,6 +913,70 @@ class PyHatchBabyRestAsync:
         ):
             return None
         return self.programs.get(slot)
+
+    async def async_set_program_enabled(self, slot: int, enabled: bool) -> dict | None:
+        """Turn one stored program on or off, leaving the rest of it alone.
+
+        The flags byte is written whole, so the slot has to be read first to
+        know what the bits other than enabled should stay as.
+        """
+        if not 1 <= slot <= PROGRAM_SLOTS:
+            raise ValueError(f"program slot {slot} is not between 1 and 10")
+
+        current = self.programs.get(slot)
+        if current is None or "flags" not in current:
+            # A slot can hold just a name, which arrives on its own.
+            current = await self.async_refresh_program(slot)
+        if current is None or "flags" not in current:
+            raise HatchRestConnectionError(
+                f"{self.address} would not say what program {slot} holds, "
+                "so it cannot be changed without guessing at its flags"
+            )
+
+        before = {field: current[field] for field in PROGRAM_CONTENT_FIELDS}
+        _LOGGER.debug(
+            "%s %s program %d",
+            self.address,
+            "enabling" if enabled else "disabling",
+            slot,
+        )
+
+        for command in _build_program_enabled_commands(slot, current["flags"], enabled):
+            if not await self._list_exchange(command):
+                # As with favorites: nothing is stored until the commit, and
+                # committing after a lost select could land on another slot.
+                raise HatchRestConnectionError(
+                    f"{self.address} did not acknowledge {command} while "
+                    f"writing program {slot}"
+                )
+
+        # Read it back. Whether ESF commits only the flags, or everything the
+        # device collected as a favorite's PSF does, has not been confirmed.
+        written = await self.async_refresh_program(slot)
+        if written is None:
+            _LOGGER.warning(
+                "%s would not say what program %d holds after writing it",
+                self.address,
+                slot,
+            )
+        else:
+            differs = {
+                field: (value, written[field])
+                for field, value in before.items()
+                if written[field] != value
+            }
+            if written["enabled"] != enabled:
+                differs["enabled"] = (enabled, written["enabled"])
+            if differs:
+                _LOGGER.warning(
+                    "%s program %d did not take what was asked for: %s",
+                    self.address,
+                    slot,
+                    differs,
+                )
+
+        self._notify_state_changed()
+        return written
 
     async def async_set_favorite(
         self,

@@ -30,6 +30,8 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 * Master on/off power state of the device
 * One per favorite, for whether the device offers it when cycling favorites
   on the touch ring
+* One per program, for whether each of the ten slots runs. What the program
+  is set to is exposed as attributes
 
 ### 🟡 Light
 
@@ -45,7 +47,6 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 * One per favorite: saves whatever the device is playing into that slot
 
 ### 📊 Sensor
-* One per program, showing what each of the ten slots is set to
 * Time remaining on the sleep timer
 
 ## ⭐ Favorites

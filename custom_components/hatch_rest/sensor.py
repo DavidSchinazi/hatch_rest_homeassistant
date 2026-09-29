@@ -1,15 +1,15 @@
-"""Hatch Rest program and timer sensors."""
+"""Hatch Rest timer sensor."""
 
 import logging
-from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfTime
+from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import PROGRAM_SLOTS
+from .const import DOMAIN, PROGRAM_SLOTS
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,18 +20,25 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the program sensors and the sleep timer."""
+    """Set up the sleep timer."""
     coordinator = config_entry.runtime_data
-    async_add_entities(
-        [
-            *(
-                HatchBabyRestProgramSensor(coordinator, slot)
-                for slot in range(1, PROGRAM_SLOTS + 1)
-            ),
-            HatchBabyRestTimerSensor(coordinator),
-        ],
-        update_before_add=False,
-    )
+    _remove_program_sensors(hass, coordinator.unique_id)
+    async_add_entities([HatchBabyRestTimerSensor(coordinator)], update_before_add=False)
+
+
+def _remove_program_sensors(hass: HomeAssistant, unique_id: str | None) -> None:
+    """Drop the program sensors earlier versions registered.
+
+    Programs are switches now. Left alone, the old sensors would sit in the
+    registry as entities no longer provided by the integration.
+    """
+    registry = er.async_get(hass)
+    for slot in range(1, PROGRAM_SLOTS + 1):
+        if entity_id := registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{unique_id}_program_{slot}"
+        ):
+            _LOGGER.debug("Removing program sensor %s", entity_id)
+            registry.async_remove(entity_id)
 
 
 class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -60,91 +67,3 @@ class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: i
     def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Return the minutes left, or nothing when no timer is running."""
         return self._hatch_rest_device.timer_remaining
-
-
-class HatchBabyRestProgramSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """What one of the device's stored programs is set to.
-
-    Read only. The commands that write a program's time, sound, colour or
-    days are not documented anywhere we can check, so this reports what the
-    device holds and changes nothing.
-    """
-
-    # Diagnostic rather than config: a sensor cannot configure anything, and
-    # Home Assistant refuses to add one that claims it can.
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator, slot: int) -> None:
-        """Initialize the sensor for one slot."""
-        super().__init__(coordinator)
-        self._slot = slot
-        self._attr_unique_id = f"{coordinator.unique_id}_program_{slot}"
-
-    @property
-    def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the name of the entity."""
-        if self._hatch_rest_device.name:
-            return f"{self._hatch_rest_device.name.title()} Program {self._slot}"
-        return None
-
-    @property
-    def _program(self) -> dict | None:
-        """Return this slot's contents, if its block has been read.
-
-        A slot can hold nothing but a name. Names arrive as their own
-        notification, so one can land before the block it belongs to, or
-        without it at all if the block never parses.
-        """
-        program = self._hatch_rest_device.programs.get(self._slot)
-        if program is None or "time" not in program:
-            return None
-        return program
-
-    @property
-    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the name the program was given on the device.
-
-        The name says what a program is for in a way its time does not, and
-        the entity is already called "Program 3", which says neither. Six of
-        forty slots here have no name; those fall back to the time rather
-        than to a placeholder, since it is at least real.
-
-        None until the slot has been read, which is not the same as a slot
-        with nothing in it.
-        """
-        program = self._program
-        if program is None:
-            return None
-        return program.get("name") or program["time"]
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the rest of what the program holds."""
-        program = self._program
-        if program is None:
-            return {}
-
-        return {
-            "name": program.get("name"),
-            "time": program["time"],
-            "days": program["days"],
-            "duration_seconds": program["duration_seconds"],
-            # Kept because the layout here was worked out from real slots
-            # against two published sources that had it wrong, and the bytes
-            # nothing has accounted for are still in it.
-            "raw": program["raw"],
-            "color": program["color"],
-            "brightness": program["brightness"],
-            "sound": (
-                program["sound"].name
-                if program["sound"] is not None
-                else program["sound_id"]
-            ),
-            "volume": program["volume"],
-            "enabled": program["enabled"],
-            "toddler_lock": program["toddler_lock"],
-            # Reported because which bit means enabled is still unsettled,
-            # and because a disabled slot is what will settle it.
-            "flags": program["flags"],
-            "start_timestamp": program["start_timestamp"],
-        }

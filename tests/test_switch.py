@@ -5,13 +5,22 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.const import EntityCategory
 
-from custom_components.hatch_rest.const import FAVORITE_SLOTS
+from custom_components.hatch_rest.api import _parse_program_block
+from custom_components.hatch_rest.const import FAVORITE_SLOTS, PROGRAM_SLOTS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.switch import (
     HatchBabyRestFavoriteEnabledSwitch,
+    HatchBabyRestProgramSwitch,
     HatchBabyRestSwitch,
     async_setup_entry,
 )
+
+# Taken from the parser rather than written out by hand. A fixture spelled
+# out separately drifts the moment a field is renamed, and agrees with
+# whatever the entity does with it -- which is how a KeyError reached a
+# device with every test passing.
+PROGRAM_BLOCK = bytes.fromhex("01f80db2650728100e000000007f2dd1fd003e40")
+PROGRAM = {**_parse_program_block(PROGRAM_BLOCK), "name": "Weekday Sleep"}
 
 
 class TestHatchBabyRestSwitch:
@@ -121,9 +130,15 @@ class TestHatchBabyRestFavoriteEnabledSwitch:
             hass, config_entry, lambda entities, **_: added.extend(entities)
         )
 
-        assert len(added) == FAVORITE_SLOTS + 1
+        favorites = [
+            s for s in added if isinstance(s, HatchBabyRestFavoriteEnabledSwitch)
+        ]
+        programs = [s for s in added if isinstance(s, HatchBabyRestProgramSwitch)]
+
+        assert len(added) == 1 + FAVORITE_SLOTS + PROGRAM_SLOTS
         assert isinstance(added[0], HatchBabyRestSwitch)
-        assert [switch._slot for switch in added[1:]] == [1, 2, 3, 4, 5, 6]
+        assert [switch._slot for switch in favorites] == [1, 2, 3, 4, 5, 6]
+        assert [switch._slot for switch in programs] == list(range(1, 11))
 
     def test_unique_ids_do_not_collide_with_the_power_switch(
         self, coordinator: HatchBabyRestUpdateCoordinator
@@ -134,12 +149,19 @@ class TestHatchBabyRestFavoriteEnabledSwitch:
         it, so without a suffix Home Assistant would keep one of the seven
         and drop the rest.
         """
-        ids = [HatchBabyRestSwitch(coordinator).unique_id] + [
-            HatchBabyRestFavoriteEnabledSwitch(coordinator, slot).unique_id
-            for slot in range(1, FAVORITE_SLOTS + 1)
-        ]
+        ids = (
+            [HatchBabyRestSwitch(coordinator).unique_id]
+            + [
+                HatchBabyRestFavoriteEnabledSwitch(coordinator, slot).unique_id
+                for slot in range(1, FAVORITE_SLOTS + 1)
+            ]
+            + [
+                HatchBabyRestProgramSwitch(coordinator, slot).unique_id
+                for slot in range(1, PROGRAM_SLOTS + 1)
+            ]
+        )
 
-        assert len(set(ids)) == FAVORITE_SLOTS + 1
+        assert len(set(ids)) == 1 + FAVORITE_SLOTS + PROGRAM_SLOTS
 
     def test_power_switch_keeps_its_original_id(
         self, coordinator: HatchBabyRestUpdateCoordinator
@@ -193,5 +215,139 @@ class TestHatchBabyRestFavoriteEnabledSwitch:
     def test_is_a_config_entity(self, coordinator: HatchBabyRestUpdateCoordinator):
         """Test these sit with the device's configuration."""
         switch = HatchBabyRestFavoriteEnabledSwitch(coordinator, 1)
+
+        assert switch.entity_category is EntityCategory.CONFIG
+
+
+class TestHatchBabyRestProgramSwitch:
+    """Tests for HatchBabyRestProgramSwitch."""
+
+    @pytest.fixture
+    def coordinator(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ) -> HatchBabyRestUpdateCoordinator:
+        """Return a coordinator with one program read."""
+        mock_coordinator.hatch_rest_device.programs = {1: dict(PROGRAM)}
+        mock_coordinator.hatch_rest_device.async_set_program_enabled = AsyncMock()
+        return mock_coordinator
+
+    def test_name_carries_the_program_name(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the name says what the program is for, when the device says."""
+        assert (
+            HatchBabyRestProgramSwitch(coordinator, 1).name
+            == "Hatch Rest Program 1 (Weekday Sleep)"
+        )
+
+    def test_an_unnamed_slot_is_named_by_number(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a slot with no name still gets one."""
+        assert HatchBabyRestProgramSwitch(coordinator, 9).name == "Hatch Rest Program 9"
+
+    def test_reports_whether_the_program_is_enabled(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the switch follows the slot's enabled bit."""
+        assert HatchBabyRestProgramSwitch(coordinator, 1).is_on is True
+
+        coordinator.hatch_rest_device.programs[1]["enabled"] = False
+
+        assert HatchBabyRestProgramSwitch(coordinator, 1).is_on is False
+
+    def test_unread_slot_is_unknown_rather_than_off(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a slot nobody has asked about does not look disabled."""
+        switch = HatchBabyRestProgramSwitch(coordinator, 9)
+
+        assert switch.is_on is None
+        assert switch.extra_state_attributes == {}
+
+    def test_a_slot_known_only_by_name_does_not_throw(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a name arriving before its block leaves the switch usable.
+
+        Names come as their own notification, so a slot can hold nothing but
+        a name for a moment -- or for good, if the block never parses.
+        """
+        coordinator.hatch_rest_device.programs = {1: {"name": "Bed Time"}}
+        switch = HatchBabyRestProgramSwitch(coordinator, 1)
+
+        assert switch.is_on is None
+        assert switch.extra_state_attributes == {}
+        assert switch.name == "Hatch Rest Program 1 (Bed Time)"
+
+    def test_attributes_report_the_rest_of_the_program(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the program's other fields are exposed."""
+        attributes = HatchBabyRestProgramSwitch(coordinator, 1).extra_state_attributes
+
+        assert attributes == {
+            "name": "Weekday Sleep",
+            "time": "07:30",
+            "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+            "duration_seconds": 3600,
+            "raw": PROGRAM_BLOCK.hex(),
+            "color": (253, 209, 45),
+            "brightness": 127,
+            "sound": "rain",
+            "volume": 40,
+            "toddler_lock": False,
+            "flags": 0x40,
+            "start_timestamp": PROGRAM["start_timestamp"],
+        }
+
+    def test_attributes_report_an_unnamed_sound_by_number(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a sound with no name still shows something."""
+        coordinator.hatch_rest_device.programs[1]["sound"] = None
+        coordinator.hatch_rest_device.programs[1]["sound_id"] = 8
+
+        attributes = HatchBabyRestProgramSwitch(coordinator, 1).extra_state_attributes
+
+        assert attributes["sound"] == 8
+
+    def test_every_attribute_comes_from_a_real_block(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a program straight from the parser renders without a KeyError."""
+        coordinator.hatch_rest_device.programs = {
+            1: _parse_program_block(PROGRAM_BLOCK)
+        }
+        switch = HatchBabyRestProgramSwitch(coordinator, 1)
+
+        assert switch.is_on is True
+        assert switch.extra_state_attributes["start_timestamp"] is not None
+
+    @pytest.mark.asyncio
+    async def test_turning_on_enables_the_program(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test enabling goes to the device for this slot."""
+        await HatchBabyRestProgramSwitch(coordinator, 10).async_turn_on()
+
+        coordinator.hatch_rest_device.async_set_program_enabled.assert_awaited_once_with(
+            10, True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turning_off_disables_the_program(
+        self, coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test disabling goes to the device for this slot."""
+        await HatchBabyRestProgramSwitch(coordinator, 3).async_turn_off()
+
+        coordinator.hatch_rest_device.async_set_program_enabled.assert_awaited_once_with(
+            3, False
+        )
+
+    def test_is_a_config_entity(self, coordinator: HatchBabyRestUpdateCoordinator):
+        """Test programs sit with the device's configuration."""
+        switch = HatchBabyRestProgramSwitch(coordinator, 1)
 
         assert switch.entity_category is EntityCategory.CONFIG
