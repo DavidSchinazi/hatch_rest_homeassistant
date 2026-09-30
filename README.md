@@ -24,6 +24,23 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 4. Confirm the Bluetooth address
 5. Done!
 
+### 🗄️ Keeping the Sleep Timer Out of History
+
+The time remaining on the sleep timer counts down once a second, and Home
+Assistant records every change: a nine hour timer leaves over 30,000 rows in
+the database. An integration cannot opt out of the recorder itself, so add
+this to `configuration.yaml` and restart Home Assistant:
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - sensor.*_timer_remaining
+```
+
+If you already have a `recorder:` section, add the `exclude:` part to it. The
+sensor still shows and counts down as before; it just keeps no history.
+
 ## 🧩 Supported Entities
 
 ### 🔌 Switch
@@ -51,7 +68,8 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 * One per favorite: saves whatever the device is playing into that slot
 
 ### 📊 Sensor
-* Time remaining on the sleep timer, counting down as H:MM:SS, or Off
+* Time remaining on the sleep timer, counting down as H:MM:SS, or Off. See
+  *Keeping the Sleep Timer Out of History* under Installation
 
 ## ⭐ Favorites
 
