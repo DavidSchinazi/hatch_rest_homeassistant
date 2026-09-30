@@ -6,10 +6,8 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, PROGRAM_SLOTS
 from .coordinator import HatchBabyRestTimerEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,27 +20,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the sleep timer."""
     coordinator = config_entry.runtime_data
-    _remove_stale_entities(hass, coordinator.unique_id)
     async_add_entities([HatchBabyRestTimerSensor(coordinator)], update_before_add=False)
-
-
-def _remove_stale_entities(hass: HomeAssistant, unique_id: str | None) -> None:
-    """Drop entities earlier versions registered and this one does not provide.
-
-    Left alone they sit in the registry as unavailable, and are easy to take
-    for the real thing:
-
-    - Program sensors: programs are switches now.
-    """
-    stale = [
-        ("sensor", f"{unique_id}_program_{slot}")
-        for slot in range(1, PROGRAM_SLOTS + 1)
-    ]
-    registry = er.async_get(hass)
-    for domain, stale_id in stale:
-        if entity_id := registry.async_get_entity_id(domain, DOMAIN, stale_id):
-            _LOGGER.debug("Removing stale entity %s", entity_id)
-            registry.async_remove(entity_id)
 
 
 class HatchBabyRestTimerSensor(HatchBabyRestTimerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]

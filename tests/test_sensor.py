@@ -4,9 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.const import EntityCategory
-from homeassistant.helpers import entity_registry as er
 
-from custom_components.hatch_rest.const import DOMAIN, PROGRAM_SLOTS
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.sensor import (
     HatchBabyRestTimerSensor,
@@ -32,36 +30,6 @@ class TestSensorSetup:
 
         assert len(added) == 1
         assert isinstance(added[0], HatchBabyRestTimerSensor)
-
-    @pytest.mark.asyncio
-    async def test_setup_removes_the_old_program_sensors(
-        self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
-    ):
-        """Test sensors registered by earlier versions do not linger."""
-        registry = er.async_get(hass)
-        for slot in range(1, PROGRAM_SLOTS + 1):
-            registry.async_get_or_create(
-                "sensor", DOMAIN, f"aabbccddeeff_program_{slot}"
-            )
-        registry.async_get_or_create("number", DOMAIN, "aabbccddeeff_timer")
-        timer = registry.async_get_or_create(
-            "sensor", DOMAIN, "aabbccddeeff_timer_remaining"
-        )
-        config_entry = MagicMock()
-        config_entry.runtime_data = mock_coordinator
-
-        await async_setup_entry(hass, config_entry, lambda entities, **_: None)
-
-        for slot in range(1, PROGRAM_SLOTS + 1):
-            assert (
-                registry.async_get_entity_id(
-                    "sensor", DOMAIN, f"aabbccddeeff_program_{slot}"
-                )
-                is None
-            )
-        # The sleep timer control is back, so its entity is kept.
-        assert registry.async_get_entity_id("number", DOMAIN, "aabbccddeeff_timer")
-        assert registry.async_get(timer.entity_id) is not None
 
 
 class TestHatchBabyRestTimerSensor:
