@@ -1,7 +1,9 @@
 """Hatch Rest favorite and sleep timer selection."""
 
 import logging
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any
 
 import voluptuous as vol
@@ -11,6 +13,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     FAVORITE_SLOTS,
@@ -224,13 +228,44 @@ class HatchBabyRestFavoriteSelect(HatchBabyRestEntity, SelectEntity):  # pyright
         await self._hatch_rest_device.async_save_favorite(slot)
 
 
-class HatchBabyRestTimerSelect(HatchBabyRestTimerEntity, SelectEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+@dataclass
+class TimerPresetData(ExtraStoredData):
+    """The preset that started the running timer, and when that timer ends.
+
+    Wall clock, since the monotonic clock the countdown runs on starts over
+    with Home Assistant.
+    """
+
+    preset: str
+    ends_at: datetime
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return what to store."""
+        return {"preset": self.preset, "ends_at": self.ends_at.isoformat()}
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]) -> "TimerPresetData | None":
+        """Return what was stored, or None if it cannot be read."""
+        try:
+            ends_at = dt_util.parse_datetime(restored["ends_at"])
+            preset = restored["preset"]
+        except (KeyError, TypeError):
+            return None
+        if ends_at is None or preset not in TIMER_PRESETS:
+            return None
+        return cls(preset, ends_at)
+
+
+class HatchBabyRestTimerSelect(HatchBabyRestTimerEntity, SelectEntity, RestoreEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The sleep timer: pick a duration to start one, or Off to cancel.
 
     Shows the preset that started the running timer, Off when there is none,
     and Custom for one started any other way -- from the app, or with an
     exact duration through the set_sleep_timer action. The time left is its
     own sensor.
+
+    The preset outlives a restart: it is stored with the time its timer ends,
+    and shown again only if the timer the device reports still ends then.
     """
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
@@ -243,6 +278,28 @@ class HatchBabyRestTimerSelect(HatchBabyRestTimerEntity, SelectEntity):  # pyrig
         # starts afterwards shows as Custom rather than as this preset.
         self._preset: str | None = None
         self._preset_expires_at: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Start ticking, and take back the preset from before a restart."""
+        await super().async_added_to_hass()
+        if (restored := await self.async_get_last_extra_data()) is None:
+            return
+        if (data := TimerPresetData.from_dict(restored.as_dict())) is None:
+            return
+        self._preset = data.preset
+        self._preset_expires_at = (
+            monotonic() + (data.ends_at - dt_util.utcnow()).total_seconds()
+        )
+
+    @property
+    def extra_restore_state_data(self) -> TimerPresetData | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the preset to take back after a restart, if one is running."""
+        if self.current_option not in TIMER_PRESETS or self._preset_expires_at is None:
+            return None
+        return TimerPresetData(
+            self.current_option,
+            dt_util.utcnow() + timedelta(seconds=self._preset_expires_at - monotonic()),
+        )
 
     @property
     def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -296,10 +353,15 @@ class HatchBabyRestTimerSelect(HatchBabyRestTimerEntity, SelectEntity):  # pyrig
         await self._async_set_timer(seconds)
 
     async def _async_set_timer(self, seconds: int) -> None:
-        """Set the timer, remembering which preset it was if it was one."""
-        await self._hatch_rest_device.async_set_timer(seconds)
+        """Set the timer, remembering which preset it was if it was one.
 
+        Remembered before it is sent rather than after, with when it should
+        end: the read back publishes, and the control would otherwise show
+        Custom for a moment on its way to the preset.
+        """
         presets = {value: label for label, value in TIMER_PRESETS.items()}
         self._preset = presets.get(seconds)
-        self._preset_expires_at = self._hatch_rest_device.timer_expires_at
+        self._preset_expires_at = monotonic() + seconds
+
+        await self._hatch_rest_device.async_set_timer(seconds)
         self.async_write_ha_state()

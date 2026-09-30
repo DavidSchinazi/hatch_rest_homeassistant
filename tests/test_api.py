@@ -1736,6 +1736,9 @@ class TestPyHatchBabyRestAsync:
             await api._sweep()
 
         assert asked[0] == "ST20260929140503U"
+        # The timer next, ahead of the sixteen slots: until it is read the
+        # entities showing it say Off.
+        assert asked[1:3] == ["GI", "GD"]
 
     @pytest.mark.asyncio
     async def test_reading_a_block_tells_home_assistant(

@@ -944,11 +944,16 @@ class PyHatchBabyRestAsync:
         self._sweep_task = asyncio.create_task(self._sweep())
 
     async def _sweep(self) -> None:
-        """Set the clock if it is due, then read everything the device stores."""
+        """Set the clock if it is due, then read everything the device stores.
+
+        The timer first: it is two short questions, and until it is read the
+        entities showing it say Off. Behind the sixteen slots it took seven
+        seconds to arrive.
+        """
         await self.async_sync_clock()
+        await self.async_refresh_timer()
         await self.async_refresh_favorites()
         await self.async_refresh_programs()
-        await self.async_refresh_timer()
 
     async def async_refresh_favorites(self) -> None:
         """Ask the device for every stored favorite."""

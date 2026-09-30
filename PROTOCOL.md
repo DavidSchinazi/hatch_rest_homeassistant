@@ -187,6 +187,10 @@ acknowledged with `OK`, like every command.
 device switched itself off 61 seconds after the command was sent — the power byte went
 to off, and `e` back to `0x00`. It replaced a timer the app had set, rather than adding to it.
 
+Cancelling is **confirmed** too: `SD0000`, sent to a device with an app-set timer about 8h24m from
+running out, was followed by `GD` answering `0000`. A 15-minute timer set right after it, `SD0384`,
+read back `0383` — 899 seconds, one already spent.
+
 Four earlier attempts had looked ignored: `SD00b4`, `SD00b4`, `SD0960`, `SD01e0`, all acknowledged,
 with neither device switching off. They were lowercase — though `SD0960` has no hex letters — and
 were judged partly by `GI` answering `FF` straight afterwards, which says nothing about the timer.

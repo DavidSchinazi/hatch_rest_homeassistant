@@ -411,6 +411,100 @@ class TestHatchBabyRestTimerSelect:
         assert timer.current_option == TIMER_CUSTOM
 
     @pytest.mark.asyncio
+    async def test_a_preset_never_shows_as_custom_on_the_way(
+        self, timer: HatchBabyRestTimerSelect
+    ):
+        """Test the preset is already shown while the timer is read back.
+
+        The read back publishes, and the control showed Custom for a moment
+        when the preset was only remembered afterwards.
+        """
+        device = timer._hatch_rest_device
+        set_timer = device.async_set_timer.side_effect
+        seen = []
+
+        async def and_look(seconds):
+            await set_timer(seconds)
+            seen.append(timer.current_option)
+
+        device.async_set_timer.side_effect = and_look
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("15 minutes")
+
+        assert seen == ["15 minutes"]
+
+    @pytest.mark.asyncio
+    async def test_a_preset_outlives_a_restart(self, timer: HatchBabyRestTimerSelect):
+        """Test the preset is stored and taken back if its timer still runs."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("15 minutes")
+        stored = timer.extra_restore_state_data
+        assert stored is not None
+        assert stored.preset == "15 minutes"
+
+        # Home Assistant restarts: a new entity, and the device still counting
+        # down the same timer.
+        restarted = HatchBabyRestTimerSelect(timer.coordinator)
+        restarted.hass = timer.hass
+        with (
+            patch.object(
+                restarted,
+                "async_get_last_extra_data",
+                AsyncMock(return_value=stored),
+            ),
+            patch(
+                "custom_components.hatch_rest.coordinator.CoordinatorEntity"
+                ".async_added_to_hass",
+                AsyncMock(),
+            ),
+            patch("custom_components.hatch_rest.coordinator.async_track_time_interval"),
+        ):
+            await restarted.async_added_to_hass()
+
+        assert restarted.current_option == "15 minutes"
+
+    @pytest.mark.asyncio
+    async def test_a_restored_preset_yields_to_a_different_timer(
+        self, timer: HatchBabyRestTimerSelect
+    ):
+        """Test a timer the app started while Home Assistant was down is Custom."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("15 minutes")
+        stored = timer.extra_restore_state_data
+
+        device = timer._hatch_rest_device
+        device.timer_remaining = 3600
+        device.timer_expires_at = monotonic() + 3600
+
+        restarted = HatchBabyRestTimerSelect(timer.coordinator)
+        restarted.hass = timer.hass
+        with (
+            patch.object(
+                restarted,
+                "async_get_last_extra_data",
+                AsyncMock(return_value=stored),
+            ),
+            patch(
+                "custom_components.hatch_rest.coordinator.CoordinatorEntity"
+                ".async_added_to_hass",
+                AsyncMock(),
+            ),
+            patch("custom_components.hatch_rest.coordinator.async_track_time_interval"),
+        ):
+            await restarted.async_added_to_hass()
+
+        assert restarted.current_option == TIMER_CUSTOM
+
+    def test_nothing_is_stored_without_a_preset(self, timer: HatchBabyRestTimerSelect):
+        """Test Off and Custom leave nothing to restore."""
+        assert timer.extra_restore_state_data is None
+
+        device = timer._hatch_rest_device
+        device.timer_remaining = 21076
+        device.timer_expires_at = monotonic() + 21076
+        assert timer.extra_restore_state_data is None
+
+    @pytest.mark.asyncio
     async def test_choosing_custom_does_nothing(self, timer: HatchBabyRestTimerSelect):
         """Test Custom is only ever shown, never sent."""
         await timer.async_select_option(TIMER_CUSTOM)
