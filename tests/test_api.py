@@ -1954,6 +1954,51 @@ class TestPyHatchBabyRestAsync:
         assert asked == ["GI", "GD"]
         assert api.timer_remaining == 10546
 
+    @pytest.mark.asyncio
+    async def test_send_command_returns_every_reply_raw(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a raw command hands back each reply, uninterpreted and unstored.
+
+        Asked with nothing in flight, the program block is not filed against
+        any slot: this is for looking, not for reading programs.
+        """
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(NAP_TIME_BLOCK))
+            api._list_notification_received(None, bytearray(NAP_TIME_STATUS))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            result = await api.async_send_command("EGB02")
+
+        assert result["command"] == "EGB02"
+        assert result["acknowledged"] is True
+        assert [reply["hex"] for reply in result["replies"]] == [
+            NAP_TIME_BLOCK.hex(),
+            NAP_TIME_STATUS.hex(),
+            "4f4b",
+        ]
+        assert result["replies"][-1]["text"] == "OK"
+        assert result["replies"][0]["text"] is None
+        assert api.programs == {}
+        # Nothing is left capturing once the exchange is over.
+        assert api._capture is None
+
+    @pytest.mark.asyncio
+    async def test_send_command_reports_no_acknowledgement(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a command the device never acknowledges says so."""
+        with (
+            patch.object(api, "_write_list_command", new_callable=AsyncMock),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+        ):
+            result = await api.async_send_command("XYZ")
+
+        assert result["acknowledged"] is False
+        assert result["replies"] == []
+
     @staticmethod
     def _timer_answers(api: PyHatchBabyRestAsync, gd: bytes | None = None):
         """Return a stand-in device that keeps whatever timer SD sets.

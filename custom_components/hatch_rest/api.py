@@ -329,6 +329,9 @@ class PyHatchBabyRestAsync:
         self._text_reply: asyncio.Future[str] | None = None
         self._last_text: str | None = None
         self._ack_reply: asyncio.Future[None] | None = None
+        # Every reply to the exchange in flight, when something wants them
+        # raw rather than interpreted -- the send_command action.
+        self._capture: list[bytes] | None = None
         self._sweep_task: asyncio.Task | None = None
         # Whether the device answered the subscription for command replies.
         # Sweeping one that did not would just be timeouts.
@@ -409,6 +412,8 @@ class PyHatchBabyRestAsync:
             self._slot_in_flight,
             data.hex(),
         )
+        if self._capture is not None:
+            self._capture.append(bytes(data))
 
         # Before the header test: a status byte of 0x01 is possible, and would
         # otherwise be taken for a block and dropped for its length.
@@ -1305,8 +1310,11 @@ class PyHatchBabyRestAsync:
         slot: int | None = None,
         kind: str | None = None,
         text: bool = False,
+        capture: list[bytes] | None = None,
     ) -> bool:
         """Send a command and wait for what it replies with.
+
+        Every reply is also appended to capture, when one is given.
 
         Returns whether the device answered. What it answered with, when it
         is a slot's contents, lands in self.favorites rather than here: a
@@ -1330,6 +1338,7 @@ class PyHatchBabyRestAsync:
             self._text_reply = loop.create_future() if text else None
             self._last_text = None
             self._ack_reply = loop.create_future()
+            self._capture = capture
 
             try:
                 await self._write_list_command(command)
@@ -1357,8 +1366,31 @@ class PyHatchBabyRestAsync:
                 self._block_reply = None
                 self._text_reply = None
                 self._ack_reply = None
+                self._capture = None
 
             return True
+
+    async def async_send_command(self, command: str) -> dict:
+        """Send any command, and return whatever the device replies with.
+
+        For working out what commands do. Nothing is interpreted: every reply
+        comes back raw, the acknowledgement included, and nothing is stored.
+        """
+        replies: list[bytes] = []
+        acknowledged = await self._list_exchange(command, capture=replies)
+        return {
+            "command": command,
+            "acknowledged": acknowledged,
+            "replies": [
+                {
+                    "hex": reply.hex(),
+                    "text": reply.decode("ascii")
+                    if reply.isascii() and reply.decode("ascii").isprintable()
+                    else None,
+                }
+                for reply in replies
+            ],
+        }
 
     async def _write_list_command(self, command: str) -> None:
         """Write a command whose reply comes back on CHAR_LIST.

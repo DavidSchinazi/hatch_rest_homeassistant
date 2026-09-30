@@ -306,13 +306,19 @@ class TestServiceRegistration:
             pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
         )
 
-        assert set(documented) == {
+        # send_command is registered by the integration rather than this
+        # platform, and addresses a device rather than an entity.
+        assert set(documented) - {"send_command"} == {
             SERVICE_SET_FAVORITE,
             SERVICE_SAVE_FAVORITE,
             SERVICE_SET_SLEEP_TIMER,
         }
-        for name, spec in documented.items():
-            assert spec["target"]["entity"]["domain"] == "select", name
+        for name in (
+            SERVICE_SET_FAVORITE,
+            SERVICE_SAVE_FAVORITE,
+            SERVICE_SET_SLEEP_TIMER,
+        ):
+            assert documented[name]["target"]["entity"]["domain"] == "select", name
         for name in (SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE):
             assert documented[name]["fields"]["slot"]["required"] is True, name
         timer = documented[SERVICE_SET_SLEEP_TIMER]["fields"]["duration"]

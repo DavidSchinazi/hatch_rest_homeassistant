@@ -103,3 +103,25 @@ set_sleep_timer:
       required: true
       selector:
         duration:
+
+send_command:
+  name: Send command
+  description: >-
+    Send any command to a Hatch Rest and return everything it replies with,
+    raw. For working out what commands do -- nothing is checked, so a wrong
+    command can change or erase what the device stores.
+  fields:
+    address:
+      name: Address
+      description: The Hatch Rest's Bluetooth address.
+      required: true
+      example: "C0:49:65:C8:8D:46"
+      selector:
+        text:
+    command:
+      name: Command
+      description: The command as sent, such as EGB05 or SD003C.
+      required: true
+      example: "EGB05"
+      selector:
+        text:

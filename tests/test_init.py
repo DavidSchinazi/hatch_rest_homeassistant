@@ -313,3 +313,54 @@ class TestOptionsUpdateListener:
             await options_update_listener(hass, mock_entry)
 
         mock_reload.assert_called_once_with("test_entry")
+
+
+class TestSendCommand:
+    """Tests for the send_command action."""
+
+    @pytest.mark.asyncio
+    async def test_sends_to_the_hatch_at_that_address(self, hass: HomeAssistant):
+        """Test the command reaches the right device and its reply comes back."""
+        from homeassistant.config_entries import ConfigEntryState
+
+        from custom_components.hatch_rest import async_setup
+
+        device = MagicMock()
+        device.async_send_command = AsyncMock(return_value={"acknowledged": True})
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            unique_id="c04965c88d46",
+            data={CONF_ADDRESS: "C0:49:65:C8:8D:46"},
+            state=ConfigEntryState.LOADED,
+        )
+        entry.add_to_hass(hass)
+        entry.runtime_data = MagicMock(hatch_rest_device=device)
+
+        assert await async_setup(hass, {})
+        response = await hass.services.async_call(
+            DOMAIN,
+            "send_command",
+            {"address": "c0:49:65:c8:8d:46", "command": "EGB05"},
+            blocking=True,
+            return_response=True,
+        )
+
+        device.async_send_command.assert_awaited_once_with("EGB05")
+        assert response == {"acknowledged": True}
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_address_is_refused(self, hass: HomeAssistant):
+        """Test a command for a Hatch that is not set up says so."""
+        from homeassistant.exceptions import ServiceValidationError
+
+        from custom_components.hatch_rest import async_setup
+
+        assert await async_setup(hass, {})
+        with pytest.raises(ServiceValidationError, match="No Hatch Rest"):
+            await hass.services.async_call(
+                DOMAIN,
+                "send_command",
+                {"address": "AA:BB:CC:DD:EE:FF", "command": "GD"},
+                blocking=True,
+                return_response=True,
+            )

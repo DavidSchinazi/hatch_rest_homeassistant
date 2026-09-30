@@ -2,6 +2,7 @@
 
 import logging
 
+import voluptuous as vol
 from bleak.backends.device import BLEDevice
 from homeassistant import config_entries, core
 from homeassistant.components import bluetooth
@@ -9,7 +10,12 @@ from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
     BluetoothScanningMode,
 )
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ADDRESS, Platform
+from homeassistant.core import ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
 from .api import PyHatchBabyRestAsync
 from .const import (
@@ -22,6 +28,17 @@ from .coordinator import HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+SERVICE_SEND_COMMAND = "send_command"
+SEND_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required("address"): cv.string,
+        # ASCII, as every command is: an opcode then hex.
+        vol.Required("command"): vol.All(cv.string, vol.Length(min=1, max=64)),
+    }
+)
+
 PLATFORMS = [
     Platform.BUTTON,
     Platform.LIGHT,
@@ -30,6 +47,31 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+
+async def async_setup(hass: core.HomeAssistant, config: ConfigType) -> bool:
+    """Register the actions that are not tied to one device's entities."""
+
+    async def send_command(call: ServiceCall) -> ServiceResponse:
+        """Send any command to one Hatch, and return what it replies with."""
+        address = call.data["address"].upper()
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if (
+                entry.state is ConfigEntryState.LOADED
+                and entry.data[CONF_ADDRESS].upper() == address
+            ):
+                device = entry.runtime_data.hatch_rest_device
+                return await device.async_send_command(call.data["command"])
+        raise ServiceValidationError(f"No Hatch Rest is set up at {address}")
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_COMMAND,
+        send_command,
+        schema=SEND_COMMAND_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    return True
 
 
 # async_setup_entry handles the setup of individual configuration
