@@ -36,8 +36,11 @@ devices sharing none of this.
 | Current state | `02260002-5efd-47eb-9c1a-de53f7a2b232` | read, notify |
 | Command replies | `02240003-5efd-47eb-9c1a-de53f7a2b232` | notify |
 
-Commands are ASCII written to TX: a two-letter opcode followed by lowercase hex bytes, `%02x`
-each. Replies to them arrive on the third characteristic, never on the state one.
+Commands are ASCII written to TX: a two- or three-letter opcode followed by hex. The case matters
+for at least one command, and is not consistent across them: the state commands (`SI`, `SC`, `SN`,
+`SV`) and the favorite writes (`PS*`) are sent in lowercase and work; `PGB`, `EGB`, `ESB` and `SD`
+are sent in uppercase and work; and `SD` in lowercase did not. Replies arrive on the third
+characteristic, never on the state one.
 
 State also reaches us without a connection at all, in the manufacturer-specific advertisement
 under manufacturer ID **1076**. Note that it rides in the *scan response*, so only an active scan
@@ -73,7 +76,7 @@ advertisement   R  T  ..  ..  ..  ..  C  r  g  b  br  S  sn  vol  E  ..×5  P  p
 | `S` | `0x53` | sound id, volume |
 | `P` | `0x50` | the power byte |
 | `E` | `0x45` | five bytes, **Inherited** — purpose unknown, and zero in every raw advertisement we captured |
-| `e` | `0x65` | in the feedback, four bytes after the power byte; in the advertisement, one byte. The first read `0x80` with a sleep timer running and `0x00` without — see [The sleep timer](#the-sleep-timer) |
+| `e` | `0x65` | in the feedback, four bytes after the power byte; in the advertisement, one byte. The first is `0x80` while a sleep timer runs and `0x00` otherwise, **confirmed** — see [The sleep timer](#the-sleep-timer) |
 
 The `T` block is the device's clock, **confirmed**: a big-endian unix timestamp holding local wall
 clock read as UTC, the same convention as a program's start time. One advertisement logged at
@@ -120,26 +123,27 @@ dgreif's code names this same field `powerPreset`, which is what put us onto it.
 | `SN{nn}` | sound |
 | `SV{vv}` | volume |
 
-Setting the colour to `(254, 254, 254)` reportedly switches the device into gradient mode. That
-claim is **Inherited** from upstream; we have seen that exact colour stored in a favorite on three
-of our four devices, which is suggestive, but we never verified the behaviour.
+Setting the colour to `(254, 254, 254)` switches the device into gradient mode, cycling through
+colours on its own. **Confirmed** by watching a device do it. The same colour is stored in favorite
+6 on three of our four devices, which is presumably how the app saves a gradient favorite.
 
 ### Sound ids
 
-**Partly confirmed.** The numbering has gaps — 1, 8 and 12 are absent — which is why this is a
-lookup rather than a range.
+**Confirmed.** The numbering has gaps — 1, 8 and 12 are absent — which is why this is a lookup
+rather than a range.
 
 | id | sound | | id | sound |
 |---|---|---|---|---|
-| 0 | none *(seen)* | | 7 | rain *(seen)* |
-| 2 | stream *(seen)* | | 9 | bird *(seen)* |
-| 3 | noise *(seen)* | | 10 | crickets |
+| 0 | none | | 7 | rain |
+| 2 | stream | | 9 | bird |
+| 3 | noise | | 10 | crickets |
 | 4 | dryer | | 11 | brahms |
-| 5 | ocean *(seen)* | | 13 | twinkle |
+| 5 | ocean | | 13 | twinkle |
 | 6 | wind | | 14 | rockabye |
 
-*(seen)* marks ids we have actually observed in live state or in a stored favorite. The rest are
-inherited from [kjoconnor/pyhatchbabyrest][kjoconnor] and unverified.
+The names are from [kjoconnor/pyhatchbabyrest][kjoconnor]. Every id was played on one device from
+Home Assistant, `SN02` through `SN0e` and back to `SN00`, and each was reported straight back in the
+state payload within about a second, while someone listened.
 
 [kjoconnor]: https://github.com/kjoconnor/pyhatchbabyrest
 
@@ -173,9 +177,12 @@ week. Idle devices answer `0000`.
 "no timer" — with that timer running, and idle devices answer `FF` or `00`. It decides nothing;
 the integration logs it and uses `GD` alone.
 
-A running timer also shows in the state payload: the `e` block after the power byte read
-`80 00 00 00` on that device and `00 00 00 00` on every idle one. Only one capture so far, so what
-the other bytes carry is **unknown**.
+A running timer also shows in the state payload, **confirmed**: the first byte of the `e` block
+after the power byte is `0x80` while a timer runs and `0x00` otherwise. Seen on two devices each
+with a timer running, in the feedback (`65 80000000`) and in the advertisement (`e` then `0x80`),
+against `0x00` on every idle device, and going back to `0x00` the moment a timer ran out. The
+integration does not use it yet — `GD` gives the time left, which this does not. What the other
+three bytes in the feedback carry is **unknown**; they have always been zero.
 
 ### Setting it — `SD{SSSS}`, **Confirmed**
 
@@ -273,9 +280,9 @@ We keep the parsing in case some device sends it, and fall back to numbering the
 
 ## The clock
 
-`ST{YYYYMMDDHHmmss}U`, followed by the usual `OK`. **Confirmed** only as far as the
-acknowledgement goes: there is no command to read the clock back, so nothing can check what the
-device did with it beyond watching whether programs fire on time.
+`ST{YYYYMMDDHHmmss}U`, followed by the usual `OK`. **Confirmed**: there is no command to read the
+clock back, but the `T` block of the state payload carries it. On two devices, the first `T` after
+`ST20260929181202U` read 18:12:02 and the first after `ST20260929194303U` read 19:43:04.
 
 The device is told the **local wall clock with no zone**, which is the same convention its
 programs use for their start times. Converting to UTC first would be converting to nothing.
@@ -292,7 +299,9 @@ Present in the published sources, untouched here, and therefore entirely **Inher
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
 - Writing programs — nothing documents how to set a program's time, sound, colour or days.
   jmnatzaganian's fork only toggles them, as this integration now does (see
-  [Enabling and disabling](#enabling-and-disabling--inherited)).
+  [Enabling and disabling](#enabling-and-disabling--confirmed)). `SiloCityLabs/hatch-rest-gen1`
+  writes whole programs with `EST`, `ESD`, `ESW`, `ESI`, `ESC`, `ESN`, `ESV`, `ESX` and `ESM`
+  between `ESB` and `ESF`; none of those has been tried here.
 
 ## Programs
 
@@ -434,7 +443,6 @@ check — its README links to reverse-engineering notes that were never committe
 | Favorite names | sent as `0x07` blocks | never sent, 24 reads |
 | Program names | sent as `0x07` blocks | sent headed `0x02`–`0x07` or `0x85` |
 | Program enabled | `flags & 0x40` | `0x02` of the status byte ahead of the name; flags always `0xdf` |
-| Program hour/minute | bytes 7 and 8 | those hold something else; time not located |
 | `GI` | the timer total; `FF` is no timer | `FF` with a timer running; not understood |
 | `GD` | minutes remaining | seconds remaining |
 | Program bytes 1-4 | a modified timestamp | the start time, read as UTC |
