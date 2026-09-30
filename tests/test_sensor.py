@@ -1,6 +1,6 @@
 """Tests for Hatch Rest sensors."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.const import EntityCategory
@@ -43,6 +43,7 @@ class TestSensorSetup:
             registry.async_get_or_create(
                 "sensor", DOMAIN, f"aabbccddeeff_program_{slot}"
             )
+        registry.async_get_or_create("number", DOMAIN, "aabbccddeeff_timer")
         timer = registry.async_get_or_create(
             "sensor", DOMAIN, "aabbccddeeff_timer_remaining"
         )
@@ -58,6 +59,10 @@ class TestSensorSetup:
                 )
                 is None
             )
+        # The sleep timer number went too; the sensor reading it stays.
+        assert (
+            registry.async_get_entity_id("number", DOMAIN, "aabbccddeeff_timer") is None
+        )
         assert registry.async_get(timer.entity_id) is not None
 
 
@@ -83,6 +88,30 @@ class TestHatchBabyRestTimerSensor:
         mock_coordinator.hatch_rest_device.timer_remaining = None
 
         assert HatchBabyRestTimerSensor(mock_coordinator).native_value is None
+
+    def test_ticks_write_only_when_the_minute_moves(
+        self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test the countdown shows between coordinator updates, without spam.
+
+        Coordinator updates come every 90 seconds, which on its own made the
+        sensor count down in steps of one or two minutes.
+        """
+        sensor = HatchBabyRestTimerSensor(mock_coordinator)
+        device = mock_coordinator.hatch_rest_device
+
+        with patch(
+            "homeassistant.helpers.entity.Entity.async_write_ha_state"
+        ) as written:
+            device.timer_remaining = 12
+            sensor._async_tick(None)
+            sensor._async_tick(None)
+            device.timer_remaining = 11
+            sensor._async_tick(None)
+            device.timer_remaining = None
+            sensor._async_tick(None)
+
+        assert written.call_count == 3
 
 
 class TestSensorEntityCategories:

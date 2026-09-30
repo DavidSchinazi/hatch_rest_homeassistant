@@ -1952,6 +1952,29 @@ class TestPyHatchBabyRestAsync:
         assert api.timer_remaining == 176
 
     @pytest.mark.asyncio
+    async def test_reading_the_timer_tells_home_assistant(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test the sensor hears about a timer at once, not at the next poll.
+
+        Seen taking 90 seconds to show a timer read at connect, because
+        nothing else happened to publish in between.
+        """
+        published = MagicMock()
+        api.set_state_changed_callback(published)
+
+        async def answer(command):
+            api._list_notification_received(
+                None, bytearray(b"FF" if command == "GI" else b"03b0")
+            )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_timer()
+
+        published.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_timer_counts_down_without_asking_again(
         self, api: PyHatchBabyRestAsync
     ):

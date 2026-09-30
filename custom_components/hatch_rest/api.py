@@ -1236,10 +1236,16 @@ class PyHatchBabyRestAsync:
         if not seconds:
             # Nothing left, or no answer that reads as a time.
             self._clear_timer()
-            return
+        else:
+            _LOGGER.debug(
+                "%s has %d seconds of sleep timer left", self.address, seconds
+            )
+            self._timer_expires_at = monotonic() + seconds
 
-        _LOGGER.debug("%s has %d seconds of sleep timer left", self.address, seconds)
-        self._timer_expires_at = monotonic() + seconds
+        # The timer is not part of the state that publishes itself, so
+        # without this the sensor waits for the next poll -- seen taking 90s
+        # to show a timer read at connect.
+        self._notify_state_changed()
 
     def _clear_timer(self) -> None:
         """Forget any sleep timer this device was thought to be running."""
