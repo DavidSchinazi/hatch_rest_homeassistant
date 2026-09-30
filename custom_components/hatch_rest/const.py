@@ -124,6 +124,25 @@ PROGRAM_CONTENT_FIELDS = (
     "toddler_lock",
 )
 
+# Writing a whole program. The device keeps one staging buffer for every
+# program slot and ESF saves all of it, so a program is only ever written
+# complete: every field sent, those not being changed read first and sent
+# back. See PROTOCOL.md, "Writing a program".
+#
+# ESL's 0x40 is what enables a program; the app writes 0x85 for the rest,
+# whether enabled or not, and so does this for a slot that was empty. What
+# those other bits and ESI's 01 mean is not known, so an existing program's
+# are read with EGL and EGI and sent back as they were.
+PROGRAM_ESL_ENABLED = 0x40
+PROGRAM_ESL_DEFAULT = 0x85
+PROGRAM_ESI_DEFAULT = "01"
+PROGRAM_LOCK_ON = "01FF0000"
+PROGRAM_LOCK_OFF = "00000000"
+PROGRAM_DURATION_MAX_SECONDS = 0xFFFF
+# The name comes back in a 17 byte reply behind a status byte, with a NUL
+# after it; the longest the app has written is 15.
+PROGRAM_NAME_MAX_LENGTH = 15
+
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
 PROGRAM_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 

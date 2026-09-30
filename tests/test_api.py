@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import Generator
 from datetime import datetime
+from datetime import time as dt_time
 from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1998,6 +1999,222 @@ class TestPyHatchBabyRestAsync:
 
         assert result["acknowledged"] is False
         assert result["replies"] == []
+
+    # TestA as the Extra holds it, written with the full sequence: 21:15 for
+    # an hour on Mon, Wed and Fri, red at 0x40, ocean at 0x30, Toddler Lock on.
+    TEST_A_BLOCK = bytes.fromhex("01d47bbd6a0530100e0000ff01400000ff002adf")
+    TEST_A_NAME = bytes.fromhex("075465737441006d650000000000000000")
+
+    @staticmethod
+    def _program_device(
+        api: PyHatchBabyRestAsync,
+        block: bytes,
+        status: bytes,
+        getters: dict[str, str],
+        written: bytes | None = None,
+    ):
+        """Return a stand-in device that answers a program's reads and writes.
+
+        EGB answers with block until ESF, and with written after it.
+        """
+        sent = []
+        saved = {"done": False}
+
+        async def answer(command):
+            sent.append(command)
+            if command == "ESF":
+                saved["done"] = True
+            if command.startswith("EGB"):
+                current = written if saved["done"] and written else block
+                api._list_notification_received(None, bytearray(current))
+                api._list_notification_received(None, bytearray(status))
+            elif command[:3] in getters:
+                api._list_notification_received(
+                    None, bytearray(getters[command[:3]].encode())
+                )
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return sent, answer
+
+    @pytest.mark.asyncio
+    async def test_set_program_sends_every_field(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test one change goes out as a complete write, in the confirmed order.
+
+        The device saves a staging buffer shared by every slot, so a field
+        left out is saved as whatever the last write to any program left.
+        """
+        written = bytearray(self.TEST_A_BLOCK)
+        written[7:9] = (600).to_bytes(2, "little")
+        sent, answer = self._program_device(
+            api,
+            self.TEST_A_BLOCK,
+            self.TEST_A_NAME,
+            {"EGI": "01", "EGL": "C5", "EGM": "01FF0000"},
+            bytes(written),
+        )
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            patch("custom_components.hatch_rest.api.datetime") as clock,
+        ):
+            clock.now.return_value = datetime(2026, 9, 30, 16, 0)  # noqa: DTZ001
+            await api.async_set_program(5, duration_seconds=600)
+
+        assert sent == [
+            "EGB05",
+            "EGI05",
+            "EGL05",
+            "EGM05",
+            "ESB05",
+            "EST20260930211500",
+            "ESD0258",
+            "ESW2A",
+            "ESI01",
+            "ESCFF000040",
+            "ESN05",
+            "ESV30",
+            "ESXTestA",
+            "ESM01FF0000",
+            "ESLC5",
+            "ESF",
+            "EGB05",
+        ]
+        assert "did not take" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_program_changes_what_it_is_given(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test every field that is given replaces what the slot held."""
+        sent, answer = self._program_device(
+            api,
+            self.TEST_A_BLOCK,
+            self.TEST_A_NAME,
+            {"EGI": "01", "EGL": "C5", "EGM": "01FF0000"},
+        )
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_program(
+                5,
+                start=dt_time(7, 30),
+                days_mask=0x7F,
+                color=(255, 255, 255),
+                brightness=0x80,
+                sound=PyHatchBabyRestSound.rain,
+                volume=0x20,
+                name="Wake up Weekend",
+                toddler_lock=False,
+                enabled=False,
+            )
+
+        assert sent[5].endswith("073000")
+        assert sent[7:15] == [
+            "ESW7F",
+            "ESI01",
+            "ESCFFFFFF80",
+            "ESN07",
+            "ESV20",
+            "ESXWake up Weekend",
+            "ESM00000000",
+            # 0x40 cleared: disabled. The rest kept as the slot had it.
+            "ESL85",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_set_program_warns_when_the_slot_did_not_take(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a program that reads back unchanged is reported."""
+        _, answer = self._program_device(
+            api,
+            self.TEST_A_BLOCK,
+            self.TEST_A_NAME,
+            {"EGI": "01", "EGL": "C5", "EGM": "01FF0000"},
+        )
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_program(5, duration_seconds=600)
+
+        assert "program 5 did not take what was asked for" in caplog.text
+        assert "duration_seconds" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_program_fills_an_empty_slot_as_the_app_would(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a new program gets the app's ESI and ESL, and a name."""
+        sent, answer = self._program_device(
+            api,
+            EMPTY_PROGRAM_BLOCK,
+            EMPTY_PROGRAM_STATUS,
+            {"EGI": "00", "EGL": "00", "EGM": "00000000"},
+        )
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_program(7, start=dt_time(19), enabled=True)
+
+        assert "ESI01" in sent
+        assert "ESLC5" in sent
+        assert "ESXProgram 7" in sent
+
+    @pytest.mark.asyncio
+    async def test_set_program_stops_before_saving_on_a_lost_command(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test nothing is saved when any command goes unacknowledged."""
+        _, answer = self._program_device(
+            api,
+            self.TEST_A_BLOCK,
+            self.TEST_A_NAME,
+            {"EGI": "01", "EGL": "C5", "EGM": "01FF0000"},
+        )
+        sent = []
+
+        async def lose_the_days(command):
+            sent.append(command)
+            if command.startswith("ESW"):
+                return
+            await answer(command)
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=lose_the_days),
+            patch("custom_components.hatch_rest.api.LIST_ACK_TIMEOUT_SECONDS", 0.01),
+            pytest.raises(HatchRestConnectionError, match="did not acknowledge ESW"),
+        ):
+            await api.async_set_program(5, duration_seconds=600)
+
+        assert "ESF" not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("change", "message"),
+        [
+            ({"duration_seconds": 0x10000}, "more than"),
+            ({"name": "A much longer name"}, "plain characters"),
+            ({"name": ""}, "plain characters"),
+            ({"name": "Café"}, "plain characters"),
+        ],
+    )
+    async def test_set_program_refuses_what_the_device_cannot_hold(
+        self, api: PyHatchBabyRestAsync, change, message
+    ):
+        """Test a value that cannot be written is refused before anything is sent."""
+        sent, answer = self._program_device(
+            api,
+            self.TEST_A_BLOCK,
+            self.TEST_A_NAME,
+            {"EGI": "01", "EGL": "C5", "EGM": "01FF0000"},
+        )
+
+        with (
+            patch.object(api, "_write_list_command", side_effect=answer),
+            pytest.raises(ValueError, match=message),
+        ):
+            await api.async_set_program(5, **change)
+
+        assert not any(command.startswith("ES") for command in sent)
 
     @staticmethod
     def _timer_answers(api: PyHatchBabyRestAsync, gd: bytes | None = None):

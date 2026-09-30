@@ -161,8 +161,10 @@ distinguishing that from a query reply by tracking which was outstanding. We nev
 see `OK` for everything, which is simpler: it marks the end of an exchange, so waiting for it is
 what makes it safe to send the next command.
 
-`SiloCityLabs/hatch-rest-gen1` independently mentions an `OK` / `E01`–`E06` handshake, which fits
-what we see, though we have never observed an error reply.
+`SiloCityLabs/hatch-rest-gen1` independently mentions an `OK` / `E01`–`E06` handshake. **`E01` is
+confirmed**: it came back in place of `OK` for `EST` given a value of the wrong length or format
+(`EST0730`, `EST073000`, `EST260930073000`, `EST20260930073000U`, `EST68F7BC6A`). What `E02`–`E06`
+mean, if they exist, is unknown.
 
 ## The sleep timer
 
@@ -297,11 +299,8 @@ where the idea came from.
 Present in the published sources, untouched here, and therefore entirely **Inherited**:
 
 - `GF` — query the active favorite. We never send it; the power byte already carries the answer.
-- Writing programs — nothing documents how to set a program's time, sound, colour or days.
-  jmnatzaganian's fork only toggles them, as this integration now does (see
-  [Enabling and disabling](#enabling-and-disabling--confirmed)). `SiloCityLabs/hatch-rest-gen1`
-  writes whole programs with `EST`, `ESD`, `ESW`, `ESI`, `ESC`, `ESN`, `ESV`, `ESX` and `ESM`
-  between `ESB` and `ESF`; none of those has been tried here.
+- `EGP`, which `SiloCityLabs/hatch-rest-gen1` reads as a program's "presets". It answered `00` on
+  every slot read.
 
 ## Programs
 
@@ -313,7 +312,7 @@ A program fed to the favorite parser does not fail — it returns a plausible fa
 from the wrong bytes — so the only safe way to tell them apart is which one was asked for.
 
 ```
-[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×2] [lock LE ×2] [brightness] [B] [G] [R] [??] [days] [flags]
+[0x01] [start LE ×4] [sound] [volume] [duration LE ×2] [00 ×2] [lock LE ×2] [brightness] [B] [G] [R] [??] [days] [written]
    0         1-4         5        6          7-8          9-10       11-12         13      14  15  16   17    18     19
 ```
 
@@ -331,7 +330,7 @@ Both sources call bytes 1-4 a modified timestamp and put the hour at byte 7 and 
 Bytes 1-4 are the **start time**: a unix timestamp whose time of day, read **as UTC**, is the local
 time the program runs at. The device writes local wall clock into a timestamp-shaped field with no
 zone, so reading it as UTC rather than converting is what makes it right — and what makes it immune
-to daylight saving. The date half is when the slot was last written.
+to daylight saving. The date half is whatever date the writer sent; see below.
 
 Bytes 7-8 are the **duration in seconds**, little endian.
 
@@ -365,11 +364,28 @@ for the toggle: the one with Toddler Lock on reads `ff01` there, the one without
 `0x01ff` is a strange thing to store for something the app presents as a switch, so the integration
 reports only whether it is set and keeps the whole block for whatever the value may otherwise mean.
 
-### The date half of the start value — **unknown**
+### The date half of the start value
 
-Its time of day is the run time, which is confirmed. What the date is for is not. On the slot that
-was edited it moved from 2020-01-20 to 2020-01-21 — forward by exactly one day, six years in the
-past, rather than to the date of the edit. So it is not a last-written date, whatever else it is.
+It is the date part of whatever `EST` was sent: `EST20260930073000` read back as
+`2026-09-30 07:30:00`. The app sends dates years in the past — 2017 to 2020 on our devices, and on
+one edit it moved forward by exactly one day — so it is not the date of the edit either. Whether the
+device does anything with the date at all is **unknown**. Programs written with the current date
+showed correctly in the app.
+
+### The last byte: which fields the last save wrote — **Contradicted**
+
+The notes read byte 19 as flags, `0x40` enabled. It is a record of which fields the last `ESF`
+saved, one bit per field command. **Confirmed** by saving one field at a time into a slot and
+watching it change:
+
+```
+0x80  ESW days      0x10  ESC colour and brightness      0x02  ESN sound
+0x40  ESI           0x08  ESD duration                   0x04  ESV volume
+0x01  set on most saves; which command owns it is unclear
+```
+
+`0x20` was never set by any single command, and is the one bit missing from `0xdf`, which is what
+every program the app saves reads: all fields but one.
 
 ### Whether a program is enabled — **Contradicted**
 
@@ -409,13 +425,60 @@ ESF         commit; answered with the slot number in ASCII ("04"), then OK
 
 `ESLc0` enabled Nap Time on a real device: the app showed it enabled afterwards, and the status
 byte read back `0x06` where it had been `0x04`. `ESL`'s `0x40` lands as `0x02` of the status byte.
+`ESL80` disables, confirmed the same way: Time to Rise went from `0x06` to `0x04`, and the app
+agreed.
 
-`ESF` commits only that. The 20-byte block read back identical, so unlike a favorite's `PSF` it does
-not rewrite fields it was not sent. The slot is still read back after every write, and anything
-other than the status that moved is logged as a warning.
+A save of `ESL` alone changes only the status: both times, the 20-byte block read back identical.
+That is special to `ESL` — see the next section, where every other save rewrites the whole
+program.
 
-`ESL80` disables, confirmed the same way: Time to Rise went from `0x06` to `0x04`, the app agreed,
-and the block again read back unchanged. `ESF` answers with the slot number in ASCII each time.
+### Writing a program — **Confirmed**
+
+A program is written as a complete sequence:
+
+```
+ESB{NN}                 select the slot, uppercase hex
+EST{YYYYMMDDHHMMSS}     start: local wall clock, no zone; only the time of day is known to matter
+ESD{SSSS}               duration in seconds, four hex digits
+ESW{DD}                 days, bit 0 = Sunday
+ESI{II}                 01 on every program the app wrote; meaning unconfirmed
+ESC{RR}{GG}{BB}{LL}     colour and brightness, red first
+ESN{NN}                 sound id
+ESV{VV}                 volume
+ESX{name}               the name, as plain ASCII
+ESM{LLLL}0000           Toddler Lock: 0000 off, 01FF on
+ESL{FF}                 85 on every program the app wrote; 0x40 added enables it
+ESF                     commit; answered with the slot number in ASCII, then OK
+```
+
+**Confirmed** by writing two programs this way on one device, every field different between them,
+and reading each back both over Bluetooth and in the app, which showed exactly what was written:
+
+```
+TestA   21:15  1h00m  Mon,Wed,Fri  red at 25%     ocean, volume 48  Toddler Lock on   enabled
+TestB   07:30  0h10m  every day    white at 50%   rain, volume 32   Toddler Lock off  enabled
+```
+
+**There is one staging buffer for all programs, and `ESF` saves all of it.** `ESB` does not load
+the selected slot into it. Saving a single field — `ESB05`, `ESD0258`, `ESF` — wrote the new
+duration, and with it a sound, volume, colour, days and a mangled name ("\0ap Time") left over
+from an earlier write to a different slot, with the start time zeroed. So the only safe write is a
+complete one, with every field sent, as for a favorite. To change one field, read the others first
+and send them back unchanged.
+
+`EST` and `ESX` are acknowledged on their own but store nothing unless they are part of such a
+complete write, which is why neither seemed to work when tried alone.
+
+Each field also has a getter taking the slot, answering in the same encoding the setter takes:
+`EGT` (`20200118130000`), `EGD`, `EGW`, `EGC`, `EGN`, `EGV`, `EGX` (the name as text), `EGM`
+(`01FF0000`), `EGI`, `EGL` and `EGP`. **Confirmed** by reading back both test programs.
+
+What `ESI`/`EGI` and `ESL`/`EGL` mean beyond enabling is **unknown**. `SiloCityLabs/hatch-rest-gen1`
+reads `EGI` as "power" and `EGL`'s bits as `0x80` exists, `0x40` enabled, `0x10` sleep timer, `0x08`
+light off, `0x04` light on, `0x02` sound off and `0x01` sound on — which would make `85` "exists,
+light on, sound on". But the app never sets `0x40` on programs it shows enabled, so that reading is
+at least partly wrong. Writing `ESI00` also cleared the Toddler Lock bytes, so `ESI` and `ESM` are
+related in some way not understood.
 
 ### Names
 
@@ -448,4 +511,6 @@ check — its README links to reverse-engineering notes that were never committe
 | Program bytes 1-4 | a modified timestamp | the start time, read as UTC |
 | Program bytes 7-8 | the hour and minute | the duration, in seconds |
 | Program bytes 11-12 | padding | the app's Toddler Lock |
+| Program byte 19 | flags, `0x40` enabled | which fields the last save wrote |
+| Saving one program field | — | saves a staging buffer shared by every slot; write all fields |
 | `SD` sets the sleep timer | in seconds, four hex digits | works, in uppercase; lowercase attempts did not run |

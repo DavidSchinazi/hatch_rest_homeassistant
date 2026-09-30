@@ -8,7 +8,7 @@ https://github.com/kjoconnor/pyhatchbabyrest/blob/master/LICENSE
 
 import asyncio
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time
 import logging
 import math
 import random
@@ -51,6 +51,13 @@ from .const import (
     PROGRAM_BRIGHTNESS_INDEX,
     PROGRAM_CONTENT_FIELDS,
     PROGRAM_DAYS,
+    PROGRAM_DURATION_MAX_SECONDS,
+    PROGRAM_ESI_DEFAULT,
+    PROGRAM_ESL_DEFAULT,
+    PROGRAM_ESL_ENABLED,
+    PROGRAM_LOCK_OFF,
+    PROGRAM_LOCK_ON,
+    PROGRAM_NAME_MAX_LENGTH,
     PROGRAM_DAYS_INDEX,
     PROGRAM_FLAG_DISABLED,
     PROGRAM_FLAG_ENABLED,
@@ -1042,6 +1049,154 @@ class PyHatchBabyRestAsync:
             }
             if written.get("enabled") != enabled:
                 differs["enabled"] = (enabled, written.get("enabled"))
+            if differs:
+                _LOGGER.warning(
+                    "%s program %d did not take what was asked for: %s",
+                    self.address,
+                    slot,
+                    differs,
+                )
+
+        self._notify_state_changed()
+        return written
+
+    async def _async_read_program_field(self, getter: str, slot: int) -> str | None:
+        """Read one field of a stored program with its getter, such as EGL."""
+        if not await self._list_exchange(f"{getter}{slot:02X}", text=True):
+            return None
+        return self._last_text
+
+    async def async_set_program(
+        self,
+        slot: int,
+        *,
+        start: dt_time | None = None,
+        duration_seconds: int | None = None,
+        days_mask: int | None = None,
+        color: tuple[int, int, int] | None = None,
+        brightness: int | None = None,
+        sound: PyHatchBabyRestSound | int | None = None,
+        volume: int | None = None,
+        name: str | None = None,
+        toddler_lock: bool | None = None,
+        enabled: bool | None = None,
+    ) -> dict | None:
+        """Rewrite one stored program, keeping whatever was not given.
+
+        The device saves a staging buffer shared by every slot, so this sends
+        every field whatever changed: a field left out would be saved as
+        whatever the last write to any program left there. Those not given
+        are read from the slot first -- the block and its name for most, and
+        the EGI, EGL and EGM getters for the three not otherwise understood.
+        """
+        if not 1 <= slot <= PROGRAM_SLOTS:
+            raise ValueError(f"program slot {slot} is not between 1 and 10")
+
+        current = await self.async_refresh_program(slot)
+        if current is None or "enabled" not in current:
+            raise HatchRestConnectionError(
+                f"{self.address} would not say what program {slot} holds, "
+                "so it cannot be changed without discarding the rest of it"
+            )
+
+        esi = await self._async_read_program_field("EGI", slot)
+        esl = await self._async_read_program_field("EGL", slot)
+        lock = await self._async_read_program_field("EGM", slot)
+        if None in (esi, esl, lock):
+            raise HatchRestConnectionError(
+                f"{self.address} would not say how program {slot} is set up"
+            )
+        assert esi is not None and esl is not None and lock is not None
+
+        flags = int(esl, 16)
+        if current["empty"] or not flags:
+            # Nothing to keep: start from what the app writes.
+            flags, esi = PROGRAM_ESL_DEFAULT, PROGRAM_ESI_DEFAULT
+        if enabled is None:
+            enabled = current["enabled"]
+        flags = (flags & ~PROGRAM_ESL_ENABLED) | (PROGRAM_ESL_ENABLED if enabled else 0)
+        if toddler_lock is not None:
+            lock = PROGRAM_LOCK_ON if toddler_lock else PROGRAM_LOCK_OFF
+
+        if start is None:
+            seconds = current["start_timestamp"] % 86400
+            start = dt_time(seconds // 3600, seconds // 60 % 60, seconds % 60)
+        wanted = {
+            "duration_seconds": current["duration_seconds"]
+            if duration_seconds is None
+            else duration_seconds,
+            "days_mask": current["days_mask"] if days_mask is None else days_mask,
+            "color": current["color"] if color is None else tuple(color),
+            "brightness": current["brightness"] if brightness is None else brightness,
+            "sound_id": current["sound_id"] if sound is None else int(sound),
+            "volume": current["volume"] if volume is None else volume,
+            "name": (current.get("name") or f"Program {slot}")
+            if name is None
+            else name,
+        }
+
+        if not 0 <= wanted["duration_seconds"] <= PROGRAM_DURATION_MAX_SECONDS:
+            raise ValueError(
+                f"a duration of {wanted['duration_seconds']} seconds is more than "
+                "a program can hold"
+            )
+        if not (
+            0 < len(wanted["name"]) <= PROGRAM_NAME_MAX_LENGTH
+            and wanted["name"].isascii()
+            and wanted["name"].isprintable()
+        ):
+            raise ValueError(
+                f"a program name must be 1 to {PROGRAM_NAME_MAX_LENGTH} plain "
+                f"characters, not {wanted['name']!r}"
+            )
+
+        # The date goes with the time the way the app sends it, as local wall
+        # clock with no zone. Only the time of day is known to matter.
+        today = datetime.now()  # noqa: DTZ005
+        red, green, blue = wanted["color"]
+        commands = [
+            f"ESB{slot:02X}",
+            f"EST{today:%Y%m%d}{start:%H%M%S}",
+            f"ESD{wanted['duration_seconds']:04X}",
+            f"ESW{wanted['days_mask']:02X}",
+            f"ESI{esi}",
+            f"ESC{red:02X}{green:02X}{blue:02X}{wanted['brightness']:02X}",
+            f"ESN{wanted['sound_id']:02X}",
+            f"ESV{wanted['volume']:02X}",
+            f"ESX{wanted['name']}",
+            f"ESM{lock}",
+            f"ESL{flags:02X}",
+            "ESF",
+        ]
+        _LOGGER.debug("%s writing program %d: %s", self.address, slot, commands)
+        for command in commands:
+            if not await self._list_exchange(command):
+                # Nothing is saved until ESF, and the next write sends every
+                # field again, so stopping here leaves the slot as it was.
+                raise HatchRestConnectionError(
+                    f"{self.address} did not acknowledge {command} while "
+                    f"writing program {slot}"
+                )
+
+        written = await self.async_refresh_program(slot)
+        if written is None:
+            _LOGGER.warning(
+                "%s would not say what program %d holds after writing it",
+                self.address,
+                slot,
+            )
+        else:
+            expected = {
+                **wanted,
+                "time": f"{start:%H:%M}",
+                "toddler_lock": lock != PROGRAM_LOCK_OFF,
+                "enabled": enabled,
+            }
+            differs = {
+                field: (value, written.get(field))
+                for field, value in expected.items()
+                if written.get(field) != value
+            }
             if differs:
                 _LOGGER.warning(
                     "%s program %d did not take what was asked for: %s",

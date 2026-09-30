@@ -1,0 +1,38 @@
+{
+  "options": {
+    "step": {
+      "init": {
+        "title": "Programs",
+        "description": "Choose a program stored on this Hatch Rest to edit.",
+        "data": {
+          "program": "Program"
+        }
+      },
+      "program": {
+        "title": "Program {slot}",
+        "description": "Saving writes the whole program to the Hatch Rest and reads it back.",
+        "data": {
+          "enabled": "Enabled",
+          "name": "Name",
+          "start": "Start time",
+          "duration": "Runs for",
+          "days": "Days",
+          "color": "Light color",
+          "brightness": "Brightness",
+          "sound": "Sound",
+          "volume": "Volume",
+          "toddler_lock": "Toddler Lock"
+        }
+      }
+    },
+    "error": {
+      "write_failed": "The Hatch Rest did not take the program. Nothing was changed; check the logs and try again.",
+      "duration_too_long": "A program can run for at most 18:12:15.",
+      "name_invalid": "Use 1 to 15 plain characters, without accents."
+    },
+    "abort": {
+      "not_loaded": "The Hatch Rest is not set up yet.",
+      "programs_unread": "The programs have not been read from the Hatch Rest yet. Wait for it to connect, then try again."
+    }
+  }
+}

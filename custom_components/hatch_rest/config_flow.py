@@ -1,6 +1,7 @@
 """Hatch Rest config flow."""
 
 import dataclasses
+from datetime import time, timedelta
 import logging
 from typing import Any
 
@@ -12,11 +13,40 @@ from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryState,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_ADDRESS, CONF_SENSOR_TYPE
+from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    ColorRGBSelector,
+    DurationSelector,
+    DurationSelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TimeSelector,
+)
 
-from .api import PyHatchBabyRestAsync
-from .const import DOMAIN, MANUFACTURER_ID
+from .api import HatchRestConnectionError, PyHatchBabyRestAsync
+from .const import (
+    DOMAIN,
+    MANUFACTURER_ID,
+    PROGRAM_DAYS,
+    PROGRAM_DURATION_MAX_SECONDS,
+    PROGRAM_NAME_MAX_LENGTH,
+    PROGRAM_SLOTS,
+    PyHatchBabyRestSound,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +76,12 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Hatch Rest config flow."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the program editor, behind the integration's Configure."""
+        return HatchBabyRestOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -170,4 +206,194 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: address,
                 CONF_SENSOR_TYPE: "switch",  # is this even required? I have other platforms supported
             },
+        )
+
+
+# What a slot that has never held a program starts as in the editor.
+NEW_PROGRAM = {
+    "enabled": False,
+    "start": "07:00:00",
+    "duration": {"hours": 1, "minutes": 0, "seconds": 0},
+    "days": list(PROGRAM_DAYS),
+    "color": [255, 255, 255],
+    "brightness": 128,
+    "sound": PyHatchBabyRestSound.none.name,
+    "volume": 64,
+    "toddler_lock": False,
+}
+
+PROGRAM_SCHEMA = vol.Schema(
+    {
+        vol.Required("enabled"): BooleanSelector(),
+        vol.Required("name"): TextSelector(),
+        vol.Required("start"): TimeSelector(),
+        vol.Required("duration"): DurationSelector(
+            DurationSelectorConfig(enable_day=False)
+        ),
+        vol.Required("days"): SelectSelector(
+            SelectSelectorConfig(
+                options=list(PROGRAM_DAYS),
+                multiple=True,
+                mode=SelectSelectorMode.LIST,
+            )
+        ),
+        vol.Required("color"): ColorRGBSelector(),
+        vol.Required("brightness"): NumberSelector(
+            NumberSelectorConfig(min=0, max=255, mode=NumberSelectorMode.SLIDER)
+        ),
+        vol.Required("sound"): SelectSelector(
+            SelectSelectorConfig(
+                options=[sound.name for sound in PyHatchBabyRestSound],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Required("volume"): NumberSelector(
+            NumberSelectorConfig(min=0, max=255, mode=NumberSelectorMode.SLIDER)
+        ),
+        vol.Required("toddler_lock"): BooleanSelector(),
+    }
+)
+
+
+def _program_form_values(slot: int, program: dict) -> dict[str, Any]:
+    """Return a stored program as the editor's fields show it."""
+    name = program.get("name") or f"Program {slot}"
+    if program["empty"]:
+        return {**NEW_PROGRAM, "name": name}
+
+    start = program["start_timestamp"] % 86400
+    duration = program["duration_seconds"]
+    sound = program["sound"]
+    return {
+        "enabled": program["enabled"],
+        "name": name,
+        "start": f"{start // 3600:02d}:{start // 60 % 60:02d}:{start % 60:02d}",
+        "duration": {
+            "hours": duration // 3600,
+            "minutes": duration // 60 % 60,
+            "seconds": duration % 60,
+        },
+        "days": list(program["days"]),
+        "color": list(program["color"]),
+        "brightness": program["brightness"],
+        # A sound with no name here cannot be shown in the list, so it reads
+        # as none; it is only changed if the form is saved.
+        "sound": sound.name if sound is not None else PyHatchBabyRestSound.none.name,
+        "volume": program["volume"],
+        "toddler_lock": program["toddler_lock"],
+    }
+
+
+def _program_changes(form: dict[str, Any]) -> dict[str, Any]:
+    """Return the editor's fields as async_set_program takes them.
+
+    Raises ValueError, with the field at fault first, for what the device
+    cannot hold.
+    """
+    duration = int(timedelta(**form["duration"]).total_seconds())
+    if duration > PROGRAM_DURATION_MAX_SECONDS:
+        raise ValueError("duration", "duration_too_long")
+    name = form["name"].strip()
+    if not (0 < len(name) <= PROGRAM_NAME_MAX_LENGTH and name.isascii()):
+        raise ValueError("name", "name_invalid")
+
+    return {
+        "enabled": form["enabled"],
+        "name": name,
+        "start": time.fromisoformat(form["start"]),
+        "duration_seconds": duration,
+        "days_mask": sum(1 << PROGRAM_DAYS.index(day) for day in form["days"]),
+        "color": tuple(int(part) for part in form["color"]),
+        "brightness": int(form["brightness"]),
+        "sound": PyHatchBabyRestSound[form["sound"]],
+        "volume": int(form["volume"]),
+        "toddler_lock": form["toddler_lock"],
+    }
+
+
+class HatchBabyRestOptionsFlow(OptionsFlow):
+    """Edit the programs stored on a Hatch Rest.
+
+    Pick a slot, then a form filled in with what it holds now. Saving writes
+    the whole program to the device and reads it back; nothing is stored in
+    the entry's options.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the editor."""
+        self._slot: int | None = None
+
+    @property
+    def _device(self) -> PyHatchBabyRestAsync:
+        return self.config_entry.runtime_data.hatch_rest_device
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which program to edit."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+        programs = self._device.programs
+        if not any("empty" in programs.get(slot, {}) for slot in programs):
+            return self.async_abort(reason="programs_unread")
+
+        if user_input is not None:
+            self._slot = int(user_input["program"])
+            return await self.async_step_program()
+
+        options = []
+        for slot in range(1, PROGRAM_SLOTS + 1):
+            program = programs.get(slot, {})
+            if "empty" not in program:
+                continue
+            if program["empty"]:
+                label = f"{slot}: empty"
+            else:
+                state = "on" if program.get("enabled") else "off"
+                label = f"{slot}: {program.get('name') or 'unnamed'} ({program['time']}, {state})"
+            options.append(SelectOptionDict(value=str(slot), label=label))
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("program"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=options, mode=SelectSelectorMode.LIST
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_program(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit one program, starting from what the device holds."""
+        assert self._slot is not None
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                changes = _program_changes(user_input)
+            except ValueError as err:
+                field, reason = err.args
+                errors[field] = reason
+            else:
+                try:
+                    await self._device.async_set_program(self._slot, **changes)
+                except (HatchRestConnectionError, ValueError) as err:
+                    _LOGGER.warning("Writing program %d failed: %s", self._slot, err)
+                    errors["base"] = "write_failed"
+                else:
+                    return self.async_create_entry(data=dict(self.config_entry.options))
+
+        values = user_input or _program_form_values(
+            self._slot, self._device.programs[self._slot]
+        )
+        return self.async_show_form(
+            step_id="program",
+            data_schema=self.add_suggested_values_to_schema(PROGRAM_SCHEMA, values),
+            errors=errors,
+            description_placeholders={"slot": str(self._slot)},
         )

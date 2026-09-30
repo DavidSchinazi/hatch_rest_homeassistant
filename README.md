@@ -88,6 +88,17 @@ available for automations:
 The wire protocol these rely on, and how much of it has been verified against
 real hardware, is written up in [PROTOCOL.md](PROTOCOL.md).
 
+## 🗓️ Programs
+
+The ten programs stored on the device can be edited from Home Assistant too.
+Go to **Settings → Devices & services → Hatch Rest**, and press **Configure**
+on the device's entry. Pick a program, and its start time, duration, days,
+light, sound, Toddler Lock, name and whether it runs are shown as they are
+now. Change what you like and save: the whole program is written to the device
+and read back. An empty slot can be filled in the same way.
+
+The switch for each program turns it on or off without opening the editor.
+
 ## 📡 Bluetooth
 
 Because the Hatch Rest is a BLE device, a compatible Home Assistant Bluetooth
