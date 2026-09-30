@@ -127,13 +127,11 @@ PROGRAM_CONTENT_FIELDS = (
 # Bit 0 is Sunday. Ordered to match, so the index into this is the bit number.
 PROGRAM_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
-# The sleep timer answers in short ASCII hex rather than a block. GI says
-# whether one is running, GD gives what is left in minutes. Note the asymmetry
-# with setting it, which takes seconds.
-#
-# The protocol notes say an idle device answers GI with FF, and three of four
-# devices here do. The fourth answers 00, and then answers GD with 0000, so a
-# total or a remainder of zero means the same thing: nothing is running.
+# The sleep timer answers in short ASCII hex rather than a block. GD gives
+# what is left in seconds -- not the minutes the notes say -- and zero when
+# nothing is running. GI is not understood: the notes call it the total and
+# FF "no timer", but a device with a timer running answered FF, and idle ones
+# answer FF or 00.
 TIMER_NONE = "FF"
 
 

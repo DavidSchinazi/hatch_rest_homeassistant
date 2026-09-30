@@ -1196,9 +1196,8 @@ class PyHatchBabyRestAsync:
     def timer_remaining(self) -> int | None:
         """Return the minutes left on the sleep timer, if one is running.
 
-        Rounded up, so a timer the device just called 118 minutes does not
-        read as 117 the instant it is asked. Whole minutes are all the device
-        reports, and counting down means holding each one until it is spent.
+        Rounded up, so a timer with 90 seconds left reads as 2 minutes rather
+        than 1: a minute is only over once it has been spent.
         """
         if self._timer_expires_at is None:
             return None
@@ -1207,13 +1206,18 @@ class PyHatchBabyRestAsync:
     async def async_refresh_timer(self) -> None:
         """Ask the device about its sleep timer.
 
-        Two questions: GI, which the notes call the total, and GD, how much
-        is left. Asked once per connection, because the answer only moves one
-        way and can be counted down from here without pestering the device.
+        GD is what answers: the seconds left, as four hex digits. The notes
+        call it minutes, but a 3h01m timer started from the app about five
+        minutes earlier answered 2932 -- 10546 seconds, 175.8 minutes, where
+        minutes would be a week. That also matches SD, which the notes say
+        takes seconds.
 
-        GD is asked whatever GI says. GI answered FF -- no timer -- on a
-        device whose app had a three hour timer running, so it cannot be
-        what decides whether there is one.
+        GI, which the notes call the total, is asked too but decides nothing.
+        It answered FF, the notes' "no timer", on that same device with its
+        timer running. What it does mean is unknown, so it is only logged.
+
+        Asked once per connection, because the answer only moves one way and
+        can be counted down from here without pestering the device.
         """
         if not await self._list_exchange("GI", text=True):
             return
@@ -1226,16 +1230,16 @@ class PyHatchBabyRestAsync:
         gd = self._last_text if answered else None
         _LOGGER.debug("%s timer: GI answered %r, GD %r", self.address, gi, gd)
 
-        # Minutes come as four hex digits. A shorter answer is not one: FF,
-        # the no-timer reply to GI, would otherwise read as 255 minutes.
-        minutes = _parse_hex_reply(gd) if gd is not None and len(gd) == 4 else None
-        if not minutes:
-            # Nothing left, or no answer that reads as minutes.
+        # Four hex digits. A shorter answer is not one: FF, the reply GI gives,
+        # would otherwise read as a timer.
+        seconds = _parse_hex_reply(gd) if gd is not None and len(gd) == 4 else None
+        if not seconds:
+            # Nothing left, or no answer that reads as a time.
             self._clear_timer()
             return
 
-        _LOGGER.debug("%s has %d minutes of sleep timer left", self.address, minutes)
-        self._timer_expires_at = monotonic() + minutes * 60
+        _LOGGER.debug("%s has %d seconds of sleep timer left", self.address, seconds)
+        self._timer_expires_at = monotonic() + seconds
 
     def _clear_timer(self) -> None:
         """Forget any sleep timer this device was thought to be running."""

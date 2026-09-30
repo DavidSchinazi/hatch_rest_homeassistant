@@ -1882,14 +1882,14 @@ class TestPyHatchBabyRestAsync:
 
         async def answer(command):
             api._list_notification_received(
-                None, bytearray(b"FF" if command == "GI" else b"00b5")
+                None, bytearray(b"FF" if command == "GI" else b"2932")
             )
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
-        assert api.timer_remaining == 181
+        assert api.timer_remaining == 176
         assert api.timer_total is None
 
     def test_feedback_is_logged_raw_when_more_than_the_clock_moves(
@@ -1912,7 +1912,7 @@ class TestPyHatchBabyRestAsync:
     async def test_refresh_timer_treats_nothing_left_as_no_timer(
         self, api: PyHatchBabyRestAsync
     ):
-        """Test a timer with zero minutes left is not a timer."""
+        """Test a timer with nothing left is not a timer."""
 
         async def answer(command):
             api._list_notification_received(
@@ -1926,26 +1926,30 @@ class TestPyHatchBabyRestAsync:
         assert api.timer_remaining is None
 
     @pytest.mark.asyncio
-    async def test_refresh_timer_reads_the_remaining_minutes(
+    async def test_refresh_timer_reads_the_remaining_seconds(
         self, api: PyHatchBabyRestAsync
     ):
-        """Test a running timer is read as hex minutes."""
+        """Test GD is read as hex seconds, not the minutes the notes say.
+
+        A 3h01m timer started from the app about five minutes earlier
+        answered 2932: 10546 seconds, or 175.8 minutes. Read as minutes it
+        would have been a week.
+        """
         asked = []
 
         async def answer(command):
             asked.append(command)
             if command == "GI":
-                api._list_notification_received(None, bytearray(b"0020"))
+                api._list_notification_received(None, bytearray(b"FF"))
             else:
-                api._list_notification_received(None, bytearray(b"0076"))
+                api._list_notification_received(None, bytearray(b"2932"))
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
         assert asked == ["GI", "GD"]
-        # 0x76 is 118, not 76 -- the reply is hex.
-        assert api.timer_remaining == 118
+        assert api.timer_remaining == 176
 
     @pytest.mark.asyncio
     async def test_timer_counts_down_without_asking_again(
@@ -1959,13 +1963,14 @@ class TestPyHatchBabyRestAsync:
 
         async def answer(command):
             api._list_notification_received(
-                None, bytearray(b"0020" if command == "GI" else b"000a")
+                None, bytearray(b"FF" if command == "GI" else b"0258")
             )
             api._list_notification_received(None, bytearray(b"OK"))
 
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
+        # 0x258 seconds is ten minutes.
         assert api.timer_remaining == 10
 
         # Five minutes later, without having asked anything.

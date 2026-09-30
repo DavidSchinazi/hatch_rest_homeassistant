@@ -73,7 +73,7 @@ advertisement   R  T  ..  ..  ..  ..  C  r  g  b  br  S  sn  vol  E  ..×5  P  p
 | `S` | `0x53` | sound id, volume |
 | `P` | `0x50` | the power byte |
 | `E` | `0x45` | five bytes, **Inherited** — purpose unknown, and zero in every raw advertisement we captured |
-| `e` | `0x65` | in the feedback, four bytes after the power byte, zero in every capture so far; in the advertisement, one byte. Purpose unknown — a suspect for the sleep timer |
+| `e` | `0x65` | in the feedback, four bytes after the power byte; in the advertisement, one byte. The first read `0x80` with a sleep timer running and `0x00` without — see [The sleep timer](#the-sleep-timer) |
 
 The `T` block is the device's clock, **confirmed**: a big-endian unix timestamp holding local wall
 clock read as UTC, the same convention as a program's start time. One advertisement logged at
@@ -162,28 +162,32 @@ what we see, though we have never observed an error reply.
 
 ## The sleep timer
 
-`GI` asks whether a timer is running and `GD` how many minutes are left.
+### Reading it — `GD` is seconds, **Contradicted**
 
-**`SD{ssss}` does not work — Contradicted.** Both sources document it as setting the timer in
-seconds, four hex digits, and neither says it was tested. On our devices it is accepted and then
-ignored:
+`GD` answers with the time left in **seconds**, four ASCII hex digits — not the minutes the notes
+give. **Confirmed** with a 3h01m (10860 s) timer started from the app: about five minutes later
+the device answered `2932`, which is 10546 seconds, 175.8 minutes. Read as minutes that would be a
+week. Idle devices answer `0000`.
 
-- Four attempts, two devices: `SD00b4`, `SD00b4`, `SD0960`, `SD01e0`.
-- Every one was acknowledged with `OK`.
-- `GI` answered `FF` immediately afterwards each time — no timer running.
-- Neither device switched off when its timer should have elapsed, with the light on and sound
-  playing throughout.
+`GI`, which the notes call the total, is **unknown**. The same device answered `FF` — the notes'
+"no timer" — with that timer running, and idle devices answer `FF` or `00`. It decides nothing;
+the integration logs it and uses `GD` alone.
 
-`SD0960` contains no hex letters, so lowercase digits are not the problem. What is wrong — the
-unit, the framing, a terminator like the one `ST` carries, or the command itself — is **unknown**.
-Reading the timer works; setting it is not implemented here until there is something that does.
+A running timer also shows in the state payload: the `e` block after the power byte read
+`80 00 00 00` on that device and `00 00 00 00` on every idle one. Only one capture so far, so what
+the other bytes carry is **unknown**.
 
-**Confirmed**: an idle device answers `GI` with `FF` on three of our four devices and `00` on the
-fourth, which the notes do not mention. Both mean the same thing.
+### Setting it — `SD{ssss}`, **unknown**
 
-**Unconfirmed**: what `GI` answers while a timer *is* running. We have never managed to start one,
-so the integration logs that reply as it arrives rather than interpreting it, and asks `GD` for the
-figure it actually uses.
+Both sources document it as setting the timer in seconds, four hex digits, and neither says it was
+tested. Four attempts here, on two devices — `SD00b4`, `SD00b4`, `SD0960`, `SD01e0` — were each
+acknowledged with `OK`, and neither device switched off when its timer should have elapsed, with
+the light on and sound playing throughout.
+
+Those attempts were judged partly by `GI` answering `FF` straight afterwards, which is now known to
+say nothing about the timer, so they deserve another look with `GD`. Seconds, which `GD` turned out
+to use, is at least consistent with what the notes say `SD` takes. Setting it is not implemented
+here until there is something that does.
 
 ## Favorites
 
@@ -422,8 +426,9 @@ check — its README links to reverse-engineering notes that were never committe
 | Program names | sent as `0x07` blocks | sent headed `0x02`–`0x07` or `0x85` |
 | Program enabled | `flags & 0x40` | `0x02` of the status byte ahead of the name; flags always `0xdf` |
 | Program hour/minute | bytes 7 and 8 | those hold something else; time not located |
-| Idle sleep timer | `GI` answers `FF` | three devices say `FF`, one says `00` |
+| `GI` | the timer total; `FF` is no timer | `FF` with a timer running; not understood |
+| `GD` | minutes remaining | seconds remaining |
 | Program bytes 1-4 | a modified timestamp | the start time, read as UTC |
 | Program bytes 7-8 | the hour and minute | the duration, in seconds |
 | Program bytes 11-12 | padding | the app's Toddler Lock |
-| `SD` sets the sleep timer | in seconds, four hex digits | acknowledged and ignored |
+| `SD` sets the sleep timer | in seconds, four hex digits | acknowledged; no timer seen to run, but only checked with `GI` |
