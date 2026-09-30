@@ -459,6 +459,17 @@ TestA   21:15  1h00m  Mon,Wed,Fri  red at 25%     ocean, volume 48  Toddler Lock
 TestB   07:30  0h10m  every day    white at 50%   rain, volume 32   Toddler Lock off  enabled
 ```
 
+Then again through the integration's own editor, rewriting TestB with every field changed, a name
+containing a space, and the `ESI` and `ESL` values the app writes (`01`, and `85` with `0x40` clear
+to disable it). Read back over Bluetooth and in the app, it matched:
+
+```
+Test B  06:45  1h30m  Tue,Thu      green at 200   bird, volume 100  Toddler Lock on   disabled
+```
+
+So a name can contain spaces, sent as they are after `ESX`, and `EGL` read back `85` — a program
+written this way looks to the device like one the app wrote.
+
 **There is one staging buffer for all programs, and `ESF` saves all of it.** `ESB` does not load
 the selected slot into it. Saving a single field — `ESB05`, `ESD0258`, `ESF` — wrote the new
 duration, and with it a sound, volume, colour, days and a mangled name ("\0ap Time") left over
