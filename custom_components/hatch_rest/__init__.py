@@ -10,7 +10,6 @@ from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
 )
 from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.helpers import entity_registry as er
 
 from .api import PyHatchBabyRestAsync
 from .const import (
@@ -98,7 +97,6 @@ async def async_setup_entry(
         _LOGGER.debug("Seeded initial state from advertisement for %s", address)
     coordinator.async_set_updated_data(coordinator.get_current_data())
 
-    _remove_timer_number(hass, entry.unique_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Hold a connection from now on: it carries state as notifications, and
@@ -110,20 +108,6 @@ async def async_setup_entry(
     )
 
     return True
-
-
-def _remove_timer_number(hass: core.HomeAssistant, unique_id: str | None) -> None:
-    """Drop the sleep timer number an earlier version registered.
-
-    The timer is a select now. One-off: once it has run on every deployment
-    there is nothing left for it to find, and it can go.
-    """
-    registry = er.async_get(hass)
-    if entity_id := registry.async_get_entity_id(
-        "number", DOMAIN, f"{unique_id}_timer"
-    ):
-        _LOGGER.debug("Removing stale entity %s", entity_id)
-        registry.async_remove(entity_id)
 
 
 async def async_unload_entry(
