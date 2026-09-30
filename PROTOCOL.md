@@ -177,7 +177,7 @@ A running timer also shows in the state payload: the `e` block after the power b
 `80 00 00 00` on that device and `00 00 00 00` on every idle one. Only one capture so far, so what
 the other bytes carry is **unknown**.
 
-### Setting it — `SD{ssss}`, **unknown**
+### Setting it — `SD{SSSS}`, **unconfirmed**
 
 Both sources document it as setting the timer in seconds, four hex digits, and neither says it was
 tested. Four attempts here, on two devices — `SD00b4`, `SD00b4`, `SD0960`, `SD01e0` — were each
@@ -185,9 +185,12 @@ acknowledged with `OK`, and neither device switched off when its timer should ha
 the light on and sound playing throughout.
 
 Those attempts were judged partly by `GI` answering `FF` straight afterwards, which is now known to
-say nothing about the timer, so they deserve another look with `GD`. Seconds, which `GD` turned out
-to use, is at least consistent with what the notes say `SD` takes. Setting it is not implemented
-here until there is something that does.
+say nothing about the timer. Seconds, which `GD` turned out to use, is consistent with what the
+notes say `SD` takes. The integration now sends it in **uppercase** hex — as `GD` answers, and as
+the one other implementation writes a program's duration (`ESD{SSSS}`) — and reads `GD` straight
+afterwards, warning if the two disagree by more than a minute.
+
+Four hex digits of seconds hold up to 18h12m; the app offers at least nine hours.
 
 ## Favorites
 

@@ -134,6 +134,10 @@ PROGRAM_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 # answer FF or 00.
 TIMER_NONE = "FF"
 
+# SD sets the timer in seconds, four hex digits like GD, so the most it can
+# hold is 0xffff seconds: 18h12m. The app offers at least nine hours.
+TIMER_MAX_SECONDS = 0xFFFF
+
 
 # Programs fire off the device's own clock, which nothing else sets. It is
 # told the local wall clock, with no zone, the same way it stores a program's

@@ -1,6 +1,6 @@
 """Hatch Rest coordinator."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components.bluetooth import (
@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -26,6 +27,11 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often an entity showing the sleep timer checks whether its minute has
+# moved on. The countdown is local, so this sends nothing; it only has to be
+# well under a minute for the value to change close to when it should.
+TIMER_TICK = timedelta(seconds=15)
 
 
 class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):
@@ -166,3 +172,40 @@ class HatchBabyRestEntity(CoordinatorEntity[HatchBabyRestUpdateCoordinator]):
     def device_name(self):
         """Return the name of the device."""
         return self._hatch_rest_device.name
+
+
+class HatchBabyRestTimerEntity(HatchBabyRestEntity):
+    """An entity showing the sleep timer, which counts down on its own.
+
+    The device is asked once per connection and the answer counted down
+    locally. Coordinator updates alone come every 90 seconds, so this also
+    ticks and writes its state whenever the value it shows has moved on.
+    """
+
+    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(coordinator)
+        self._last_written = None
+
+    async def async_added_to_hass(self) -> None:
+        """Start ticking."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(self.hass, self._async_tick, TIMER_TICK)
+        )
+
+    @callback
+    def _async_tick(self, _now: datetime | None) -> None:
+        """Write the state if what it shows has changed since last time."""
+        if self._timer_value() != self._last_written:
+            self.async_write_ha_state()
+
+    @callback
+    def async_write_ha_state(self) -> None:
+        """Write the state, remembering the value so ticks can skip repeats."""
+        self._last_written = self._timer_value()
+        super().async_write_ha_state()
+
+    def _timer_value(self):
+        """Return the value this entity shows for the timer."""
+        raise NotImplementedError

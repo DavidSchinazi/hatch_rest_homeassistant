@@ -65,6 +65,7 @@ from .const import (
     PROGRAM_STATUS_ENABLED,
     PROGRAM_STATUS_LENGTH,
     PROGRAM_VOLUME_INDEX,
+    TIMER_MAX_SECONDS,
     TIMER_NONE,
     FAVORITE_SOUND_INDEX,
     FAVORITE_VOLUME_INDEX,
@@ -1246,6 +1247,41 @@ class PyHatchBabyRestAsync:
         # without this the sensor waits for the next poll -- seen taking 90s
         # to show a timer read at connect.
         self._notify_state_changed()
+
+    async def async_set_timer(self, seconds: int) -> None:
+        """Start the sleep timer, or cancel it with zero.
+
+        Uppercase hex, as GD answers and as the one other implementation
+        writes a program's duration (ESD). Four lowercase attempts earlier all
+        looked ignored -- though that was judged partly by GI, which turned
+        out to say nothing about the timer.
+
+        Read back with GD afterwards, which is the only way to know it took.
+        """
+        if not 0 <= seconds <= TIMER_MAX_SECONDS:
+            raise ValueError(
+                f"sleep timer of {seconds} seconds is not between 0 and "
+                f"{TIMER_MAX_SECONDS}"
+            )
+
+        _LOGGER.debug("%s setting a sleep timer of %d seconds", self.address, seconds)
+        if not await self._list_exchange(f"SD{seconds:04X}"):
+            raise HatchRestConnectionError(
+                f"{self.address} did not accept a sleep timer"
+            )
+
+        await self.async_refresh_timer()
+
+        # Within a minute either way: the read comes a moment after the write,
+        # and the device may count from its own idea of when it started.
+        remaining = self.timer_remaining or 0
+        if abs(remaining * 60 - seconds) > 60:
+            _LOGGER.warning(
+                "%s was asked for a %d second sleep timer and reports %s minutes",
+                self.address,
+                seconds,
+                self.timer_remaining,
+            )
 
     def _clear_timer(self) -> None:
         """Forget any sleep timer this device was thought to be running."""

@@ -59,10 +59,8 @@ class TestSensorSetup:
                 )
                 is None
             )
-        # The sleep timer number went too; the sensor reading it stays.
-        assert (
-            registry.async_get_entity_id("number", DOMAIN, "aabbccddeeff_timer") is None
-        )
+        # The sleep timer control is back, so its entity is kept.
+        assert registry.async_get_entity_id("number", DOMAIN, "aabbccddeeff_timer")
         assert registry.async_get(timer.entity_id) is not None
 
 

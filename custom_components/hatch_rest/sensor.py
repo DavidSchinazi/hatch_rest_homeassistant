@@ -1,25 +1,18 @@
 """Hatch Rest timer sensor."""
 
-from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN, PROGRAM_SLOTS
-from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
+from .coordinator import HatchBabyRestTimerEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-# How often the timer sensor checks whether its minute has moved on. The
-# countdown is local, so this sends nothing; it only has to be well under a
-# minute for the value to change close to when it should.
-TIMER_TICK = timedelta(seconds=15)
 
 
 async def async_setup_entry(
@@ -40,15 +33,10 @@ def _remove_stale_entities(hass: HomeAssistant, unique_id: str | None) -> None:
     for the real thing:
 
     - Program sensors: programs are switches now.
-    - The sleep timer number: setting the timer has never been shown to work,
-      so only this sensor reading it remains.
     """
     stale = [
-        *(
-            ("sensor", f"{unique_id}_program_{slot}")
-            for slot in range(1, PROGRAM_SLOTS + 1)
-        ),
-        ("number", f"{unique_id}_timer"),
+        ("sensor", f"{unique_id}_program_{slot}")
+        for slot in range(1, PROGRAM_SLOTS + 1)
     ]
     registry = er.async_get(hass)
     for domain, stale_id in stale:
@@ -57,13 +45,10 @@ def _remove_stale_entities(hass: HomeAssistant, unique_id: str | None) -> None:
             registry.async_remove(entity_id)
 
 
-class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+class HatchBabyRestTimerSensor(HatchBabyRestTimerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """How much of the device's sleep timer is left.
 
-    The device is asked once per connection and the answer counted down from
-    there, so this moves without anything being sent. Coordinator updates
-    alone come every 90 seconds, so the sensor also ticks on its own and
-    writes its state whenever the minute it shows has moved on.
+    Counts down on its own; see HatchBabyRestTimerEntity.
     """
 
     _attr_device_class = SensorDeviceClass.DURATION
@@ -73,26 +58,10 @@ class HatchBabyRestTimerSensor(HatchBabyRestEntity, SensorEntity):  # pyright: i
         """Initialize the timer sensor."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.unique_id}_timer_remaining"
-        self._last_written: int | None = None
 
-    async def async_added_to_hass(self) -> None:
-        """Start ticking."""
-        await super().async_added_to_hass()
-        self.async_on_remove(
-            async_track_time_interval(self.hass, self._async_tick, TIMER_TICK)
-        )
-
-    @callback
-    def _async_tick(self, _now: datetime) -> None:
-        """Write the state if the minutes left have changed since last time."""
-        if self.native_value != self._last_written:
-            self.async_write_ha_state()
-
-    @callback
-    def async_write_ha_state(self) -> None:
-        """Write the state, remembering the value so ticks can skip repeats."""
-        self._last_written = self.native_value
-        super().async_write_ha_state()
+    def _timer_value(self) -> int | None:
+        """Return the minutes left, as this sensor shows them."""
+        return self.native_value
 
     @property
     def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]

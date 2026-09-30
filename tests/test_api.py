@@ -1951,6 +1951,79 @@ class TestPyHatchBabyRestAsync:
         assert asked == ["GI", "GD"]
         assert api.timer_remaining == 176
 
+    @staticmethod
+    def _timer_answers(api: PyHatchBabyRestAsync, gd: bytes | None = None):
+        """Return a stand-in device that keeps whatever timer SD sets.
+
+        GD answers with what was set, unless told to answer something else.
+        """
+        sent = []
+        timer = {"seconds": 0}
+
+        async def answer(command):
+            sent.append(command)
+            if command.startswith("SD"):
+                timer["seconds"] = int(command.removeprefix("SD"), 16)
+            elif command == "GI":
+                api._list_notification_received(None, bytearray(b"FF"))
+            elif command == "GD":
+                reply = gd or f"{timer['seconds']:04X}".encode()
+                api._list_notification_received(None, bytearray(reply))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        return sent, answer
+
+    @pytest.mark.asyncio
+    async def test_set_timer_sends_seconds_in_uppercase_and_reads_back(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test SD goes out as GD comes back: seconds, four uppercase digits."""
+        sent, answer = self._timer_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(9 * 3600)
+
+        assert sent == ["SD7E90", "GI", "GD"]
+        assert api.timer_remaining == 540
+        assert "reports" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_timer_to_zero_cancels(self, api: PyHatchBabyRestAsync):
+        """Test zero clears a running timer."""
+        api._timer_expires_at = monotonic() + 600
+        sent, answer = self._timer_answers(api)
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(0)
+
+        assert sent[0] == "SD0000"
+        assert api.timer_remaining is None
+
+    @pytest.mark.asyncio
+    async def test_set_timer_warns_when_the_device_did_not_take_it(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a timer that does not read back is reported.
+
+        Earlier attempts at SD were all acknowledged and none were seen to
+        run, so an acknowledgement alone proves nothing.
+        """
+        _, answer = self._timer_answers(api, gd=b"0000")
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_set_timer(600)
+
+        assert "asked for a 600 second sleep timer and reports None" in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("seconds", [-1, 0x10000])
+    async def test_set_timer_rejects_what_four_digits_cannot_hold(
+        self, api: PyHatchBabyRestAsync, seconds
+    ):
+        """Test the range is what SD's four hex digits of seconds allow."""
+        with pytest.raises(ValueError, match="not between"):
+            await api.async_set_timer(seconds)
+
     @pytest.mark.asyncio
     async def test_reading_the_timer_tells_home_assistant(
         self, api: PyHatchBabyRestAsync

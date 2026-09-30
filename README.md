@@ -46,6 +46,10 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 ### 🔘 Button
 * One per favorite: saves whatever the device is playing into that slot
 
+### 🔢 Number
+* Sleep timer, in minutes: set it to start a timer, or to 0 to cancel. Shows
+  the time left, counting down
+
 ### 📊 Sensor
 * Time remaining on the sleep timer
 
