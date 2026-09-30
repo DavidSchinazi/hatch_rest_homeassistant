@@ -76,7 +76,7 @@ advertisement   R  T  ..  ..  ..  ..  C  r  g  b  br  S  sn  vol  E  ..×5  P  p
 | `S` | `0x53` | sound id, volume |
 | `P` | `0x50` | the power byte |
 | `E` | `0x45` | five bytes, **Inherited** — purpose unknown, and zero in every raw advertisement we captured |
-| `e` | `0x65` | in the feedback, four bytes after the power byte; in the advertisement, one byte. The first is `0x80` while a sleep timer runs and `0x00` otherwise, **confirmed** — see [The sleep timer](#the-sleep-timer) |
+| `e` | `0x65` | in the feedback, four bytes after the power byte; in the advertisement, one byte. The first is `0x80` while a sleep timer runs, `0x80` plus the slot while a program runs, and `0x00` otherwise, **confirmed** — see [The sleep timer](#the-sleep-timer) and [A program firing](#a-program-firing--confirmed) |
 
 The `T` block is the device's clock, **confirmed**: a big-endian unix timestamp holding local wall
 clock read as UTC, the same convention as a program's start time. One advertisement logged at
@@ -507,6 +507,25 @@ NUL are not always zero ("Bed Time" is followed by `ff81008000ffff`, and TestA a
 A second fork, `SiloCityLabs/hatch-rest-gen1`, implements programs with a different and larger
 command set. Where it overlaps wmbest2 it agrees; where it does not, its provenance is harder to
 check — its README links to reverse-engineering notes that were never committed.
+
+### A program firing — **Confirmed**
+
+A program written by the integration's editor, on a device that was off, to start at 16:42:00 and
+run for two minutes every day, in green at 200 with bird at volume 40:
+
+```
+16:39:00  off
+16:42:01  on, (0, 255, 0) at 200, bird, volume 40     e 86 00 00 00
+16:44:01  off                                          e 00 00 00 00
+```
+
+It came on within about a second of its start time — which also confirms the device's clock, set
+by `ST`, is what programs run off — played exactly what was stored, and switched off after its
+duration.
+
+While it ran, the first byte of the `e` block read `0x86`: the `0x80` a sleep timer sets, plus the
+program's slot, 6. So `0x80` is whatever will switch the device off, and the low bits name the
+program running, when it is one.
 
 ## Summary of disagreements with the published sources
 
