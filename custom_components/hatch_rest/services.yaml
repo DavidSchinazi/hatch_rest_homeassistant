@@ -85,3 +85,21 @@ save_favorite:
           min: 1
           max: 6
           mode: box
+
+set_sleep_timer:
+  name: Set sleep timer
+  description: >-
+    Start the Hatch Rest's sleep timer for an exact duration, after which it
+    switches itself off. A duration of zero cancels a running timer. Replaces
+    any timer already running, including one started from the app.
+  target:
+    entity:
+      integration: hatch_rest
+      domain: select
+  fields:
+    duration:
+      name: Duration
+      description: How long until the Hatch Rest switches off, up to 18:12:15.
+      required: true
+      selector:
+        duration:

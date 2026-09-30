@@ -1,6 +1,7 @@
-"""Hatch Rest favorite selection."""
+"""Hatch Rest favorite and sleep timer selection."""
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -11,8 +12,19 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import FAVORITE_SLOTS, PyHatchBabyRestSound
-from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
+from .const import (
+    FAVORITE_SLOTS,
+    TIMER_CUSTOM,
+    TIMER_MAX_SECONDS,
+    TIMER_OFF,
+    TIMER_PRESETS,
+    PyHatchBabyRestSound,
+)
+from .coordinator import (
+    HatchBabyRestEntity,
+    HatchBabyRestTimerEntity,
+    HatchBabyRestUpdateCoordinator,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +33,7 @@ OPTION_NONE = "None"
 
 SERVICE_SET_FAVORITE = "set_favorite"
 SERVICE_SAVE_FAVORITE = "save_favorite"
+SERVICE_SET_SLEEP_TIMER = "set_sleep_timer"
 
 SLOT_SCHEMA = {
     vol.Required("slot"): vol.All(vol.Coerce(int), vol.Range(min=1, max=FAVORITE_SLOTS))
@@ -38,6 +51,22 @@ SET_FAVORITE_SCHEMA = {
     vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
     vol.Optional("enabled"): cv.boolean,
 }
+
+# Zero cancels. The ceiling is what SD's four hex digits of seconds hold.
+SET_SLEEP_TIMER_SCHEMA = {
+    vol.Required("duration"): vol.All(
+        cv.time_period,
+        vol.Range(
+            min=timedelta(0),
+            max=timedelta(seconds=TIMER_MAX_SECONDS),
+            msg="duration must be between 0 and 18:12:15",
+        ),
+    )
+}
+
+# How close a running timer's end has to be to the one a preset set, for the
+# control to go on showing that preset.
+TIMER_PRESET_TOLERANCE_SECONDS = 5
 
 
 async def async_setup_entry(
@@ -59,9 +88,18 @@ async def async_setup_entry(
         SLOT_SCHEMA,
         "async_save_favorite",
     )
+    platform.async_register_entity_service(
+        SERVICE_SET_SLEEP_TIMER,
+        SET_SLEEP_TIMER_SCHEMA,
+        "async_set_sleep_timer",
+    )
 
     async_add_entities(
-        [HatchBabyRestFavoriteSelect(coordinator)], update_before_add=False
+        [
+            HatchBabyRestFavoriteSelect(coordinator),
+            HatchBabyRestTimerSelect(coordinator),
+        ],
+        update_before_add=False,
     )
 
 
@@ -184,3 +222,84 @@ class HatchBabyRestFavoriteSelect(HatchBabyRestEntity, SelectEntity):  # pyright
         """Save what the device is playing now into one of its favorites."""
         _LOGGER.debug("select saving current state to favorite %d", slot)
         await self._hatch_rest_device.async_save_favorite(slot)
+
+
+class HatchBabyRestTimerSelect(HatchBabyRestTimerEntity, SelectEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """The sleep timer: pick a duration to start one, or Off to cancel.
+
+    Shows the preset that started the running timer, Off when there is none,
+    and Custom for one started any other way -- from the app, or with an
+    exact duration through the set_sleep_timer action. The time left is its
+    own sensor.
+    """
+
+    def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
+        """Initialize the timer control."""
+        super().__init__(coordinator)
+        # The id the number control had. A different platform, so no clash.
+        self._attr_unique_id = f"{coordinator.unique_id}_timer"
+        # The preset last chosen here, and when the timer it started ends.
+        # Held against the device's own countdown, so that a timer the app
+        # starts afterwards shows as Custom rather than as this preset.
+        self._preset: str | None = None
+        self._preset_expires_at: float | None = None
+
+    @property
+    def name(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the name of the entity."""
+        if self._hatch_rest_device.name:
+            return f"{self._hatch_rest_device.name.title()} Sleep Timer"
+        return None
+
+    @property
+    def current_option(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return Off, the preset that started the timer, or Custom."""
+        if self._hatch_rest_device.timer_remaining is None:
+            return TIMER_OFF
+
+        expires_at = self._hatch_rest_device.timer_expires_at
+        if (
+            self._preset is not None
+            and self._preset_expires_at is not None
+            and expires_at is not None
+            and abs(expires_at - self._preset_expires_at)
+            <= TIMER_PRESET_TOLERANCE_SECONDS
+        ):
+            return self._preset
+        return TIMER_CUSTOM
+
+    @property
+    def options(self) -> list[str]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return Off and the presets, and Custom while one is running."""
+        options = [TIMER_OFF, *TIMER_PRESETS]
+        if self.current_option == TIMER_CUSTOM:
+            options.append(TIMER_CUSTOM)
+        return options
+
+    def _timer_value(self) -> str:
+        """Return the option this control shows."""
+        return self.current_option
+
+    async def async_select_option(self, option: str) -> None:
+        """Start the chosen timer, or cancel with Off."""
+        if option == TIMER_CUSTOM:
+            # Only ever shown, never a thing to pick.
+            return
+        seconds = 0 if option == TIMER_OFF else TIMER_PRESETS[option]
+        _LOGGER.debug("select setting sleep timer to %s", option)
+        await self._async_set_timer(seconds)
+
+    async def async_set_sleep_timer(self, duration: timedelta) -> None:
+        """Start a sleep timer of an exact duration, or cancel it with zero."""
+        seconds = int(duration.total_seconds())
+        _LOGGER.debug("select setting sleep timer to %d seconds", seconds)
+        await self._async_set_timer(seconds)
+
+    async def _async_set_timer(self, seconds: int) -> None:
+        """Set the timer, remembering which preset it was if it was one."""
+        await self._hatch_rest_device.async_set_timer(seconds)
+
+        presets = {value: label for label, value in TIMER_PRESETS.items()}
+        self._preset = presets.get(seconds)
+        self._preset_expires_at = self._hatch_rest_device.timer_expires_at
+        self.async_write_ha_state()

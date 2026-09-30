@@ -42,16 +42,16 @@ It was deployed successfully for 4 Hatch Rest 1st-gen devices using two ESP32s r
 ### ⭐ Select
 * Which of the six stored favorites is playing. Selecting one plays it;
   what each holds is exposed as attributes
+* Sleep timer: pick a duration from 15 minutes to 12 hours to start one, or
+  Off to cancel. A timer started from the app shows as Custom. For any exact
+  duration, use the **Set sleep timer** action, which takes hours, minutes and
+  seconds
 
 ### 🔘 Button
 * One per favorite: saves whatever the device is playing into that slot
 
-### 🔢 Number
-* Sleep timer, in minutes: set it to start a timer, or to 0 to cancel. Shows
-  the time left, counting down
-
 ### 📊 Sensor
-* Time remaining on the sleep timer
+* Time remaining on the sleep timer, counting down as H:MM:SS, or Off
 
 ## ⭐ Favorites
 

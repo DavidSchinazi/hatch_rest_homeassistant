@@ -1194,15 +1194,22 @@ class PyHatchBabyRestAsync:
             _LOGGER.warning("%s did not accept the clock", self.address)
 
     @property
-    def timer_remaining(self) -> int | None:
-        """Return the minutes left on the sleep timer, if one is running.
+    def timer_expires_at(self) -> float | None:
+        """Return when the sleep timer runs out, on the monotonic clock."""
+        return self._timer_expires_at
 
-        Rounded up, so a timer with 90 seconds left reads as 2 minutes rather
-        than 1: a minute is only over once it has been spent.
+    @property
+    def timer_remaining(self) -> int | None:
+        """Return the seconds left on the sleep timer, or None with no timer.
+
+        Rounded up, so a timer with half a second left still reads as one: a
+        second is only over once it has been spent. One that has run out is
+        no timer at all, not a timer at zero.
         """
         if self._timer_expires_at is None:
             return None
-        return max(0, math.ceil((self._timer_expires_at - monotonic()) / 60))
+        remaining = math.ceil(self._timer_expires_at - monotonic())
+        return remaining if remaining > 0 else None
 
     async def async_refresh_timer(self) -> None:
         """Ask the device about its sleep timer.
@@ -1272,12 +1279,11 @@ class PyHatchBabyRestAsync:
 
         await self.async_refresh_timer()
 
-        # Within a minute either way: the read comes a moment after the write,
-        # and the device may count from its own idea of when it started.
+        # A few seconds either way: the read comes a moment after the write.
         remaining = self.timer_remaining or 0
-        if abs(remaining * 60 - seconds) > 60:
+        if abs(remaining - seconds) > 5:
             _LOGGER.warning(
-                "%s was asked for a %d second sleep timer and reports %s minutes",
+                "%s was asked for a %d second sleep timer and reports %s seconds",
                 self.address,
                 seconds,
                 self.timer_remaining,

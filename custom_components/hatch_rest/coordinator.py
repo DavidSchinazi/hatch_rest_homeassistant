@@ -28,10 +28,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# How often an entity showing the sleep timer checks whether its minute has
-# moved on. The countdown is local, so this sends nothing; it only has to be
-# well under a minute for the value to change close to when it should.
-TIMER_TICK = timedelta(seconds=15)
+# How often an entity showing the sleep timer checks whether what it shows
+# has moved on. The countdown is local, so this sends nothing. Every second,
+# since the time left is shown to the second.
+TIMER_TICK = timedelta(seconds=1)
 
 
 class HatchBabyRestUpdateCoordinator(DataUpdateCoordinator):

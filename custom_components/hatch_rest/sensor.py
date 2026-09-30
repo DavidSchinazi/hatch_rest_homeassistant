@@ -2,12 +2,12 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import TIMER_OFF
 from .coordinator import HatchBabyRestTimerEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,22 +23,31 @@ async def async_setup_entry(
     async_add_entities([HatchBabyRestTimerSensor(coordinator)], update_before_add=False)
 
 
-class HatchBabyRestTimerSensor(HatchBabyRestTimerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """How much of the device's sleep timer is left.
+def format_timer(seconds: int | None) -> str:
+    """Return a time left as H:MM:SS, or Off when there is none."""
+    if not seconds:
+        return TIMER_OFF
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
 
+
+class HatchBabyRestTimerSensor(HatchBabyRestTimerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """How much of the device's sleep timer is left, as H:MM:SS or Off.
+
+    Text rather than a duration, which is the one thing Home Assistant will
+    not show as hours, minutes and seconds together, nor as Off. That makes it
+    one state change a second while a timer runs, and nothing to graph.
     Counts down on its own; see HatchBabyRestTimerEntity.
     """
-
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
 
     def __init__(self, coordinator: HatchBabyRestUpdateCoordinator) -> None:
         """Initialize the timer sensor."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.unique_id}_timer_remaining"
 
-    def _timer_value(self) -> int | None:
-        """Return the minutes left, as this sensor shows them."""
+    def _timer_value(self) -> str:
+        """Return the time left, as this sensor shows it."""
         return self.native_value
 
     @property
@@ -49,6 +58,6 @@ class HatchBabyRestTimerSensor(HatchBabyRestTimerEntity, SensorEntity):  # pyrig
         return None
 
     @property
-    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the minutes left, or nothing when no timer is running."""
-        return self._hatch_rest_device.timer_remaining
+    def native_value(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """Return the time left, or Off when no timer is running."""
+        return format_timer(self._hatch_rest_device.timer_remaining)

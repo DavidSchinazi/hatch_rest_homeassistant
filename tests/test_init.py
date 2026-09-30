@@ -8,10 +8,12 @@ from bleak.backends.device import BLEDevice
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hatch_rest import (
     PLATFORMS,
+    _remove_timer_number,
     async_setup_entry,
     async_unload_entry,
     options_update_listener,
@@ -275,6 +277,29 @@ class TestAsyncSetupEntry:
         # And with state in hand the entities can report themselves usable.
         assert coordinator.hatch_rest_device.has_state is True
         assert HatchBabyRestEntity(coordinator).available is True
+
+
+class TestRemoveTimerNumber:
+    """Tests for the one-off removal of the sleep timer number."""
+
+    def test_removes_the_number_and_nothing_else(self, hass: HomeAssistant):
+        """Test the number goes, and the select and sensor replacing it stay."""
+        registry = er.async_get(hass)
+        number = registry.async_get_or_create("number", DOMAIN, "aabbccddeeff_timer")
+        select = registry.async_get_or_create("select", DOMAIN, "aabbccddeeff_timer")
+        sensor = registry.async_get_or_create(
+            "sensor", DOMAIN, "aabbccddeeff_timer_remaining"
+        )
+
+        _remove_timer_number(hass, "aabbccddeeff")
+
+        assert registry.async_get(number.entity_id) is None
+        assert registry.async_get(select.entity_id) is not None
+        assert registry.async_get(sensor.entity_id) is not None
+
+    def test_does_nothing_once_it_is_gone(self, hass: HomeAssistant):
+        """Test a registry with no number is left alone."""
+        _remove_timer_number(hass, "aabbccddeeff")
 
 
 class TestAsyncUnloadEntry:

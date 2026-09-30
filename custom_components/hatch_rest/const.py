@@ -138,6 +138,31 @@ TIMER_NONE = "FF"
 # hold is 0xffff seconds: 18h12m. The app offers at least nine hours.
 TIMER_MAX_SECONDS = 0xFFFF
 
+# What the sleep timer shows, and offers, when it is not running.
+TIMER_OFF = "Off"
+
+# The durations offered for the sleep timer on a dashboard. The app takes any
+# number of hours and minutes; these are just common ones, and anything else
+# can be set with the set_sleep_timer action.
+TIMER_PRESETS = {
+    "15 minutes": 15 * 60,
+    "30 minutes": 30 * 60,
+    "45 minutes": 45 * 60,
+    "1 hour": 3600,
+    "1.5 hours": 90 * 60,
+    "2 hours": 2 * 3600,
+    "3 hours": 3 * 3600,
+    "4 hours": 4 * 3600,
+    "6 hours": 6 * 3600,
+    "8 hours": 8 * 3600,
+    "10 hours": 10 * 3600,
+    "12 hours": 12 * 3600,
+}
+
+# What the timer control shows for a timer that is not one of the presets,
+# such as one started from the app.
+TIMER_CUSTOM = "Custom"
+
 
 # Programs fire off the device's own clock, which nothing else sets. It is
 # told the local wall clock, with no zone, the same way it stores a program's

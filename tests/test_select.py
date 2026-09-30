@@ -1,15 +1,25 @@
-"""Tests for Hatch Rest favorite select entity."""
+"""Tests for Hatch Rest favorite and sleep timer select entities."""
 
 import pathlib
-from unittest.mock import AsyncMock
+from datetime import timedelta
+from time import monotonic
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous as vol
 
-from custom_components.hatch_rest.const import PyHatchBabyRestSound
+from custom_components.hatch_rest.const import (
+    TIMER_CUSTOM,
+    TIMER_OFF,
+    TIMER_PRESETS,
+    PyHatchBabyRestSound,
+)
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.select import (
     OPTION_NONE,
+    SET_SLEEP_TIMER_SCHEMA,
     HatchBabyRestFavoriteSelect,
+    HatchBabyRestTimerSelect,
 )
 
 
@@ -229,7 +239,7 @@ class TestServiceRegistration:
     async def test_setup_registers_the_services(
         self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test setting up the platform registers both favorite services.
+        """Test setting up the platform registers every service.
 
         The registration is easy to get wrong in a way nothing else catches:
         the service simply never appears, and the entity looks fine.
@@ -239,6 +249,7 @@ class TestServiceRegistration:
         from custom_components.hatch_rest.select import (
             SERVICE_SAVE_FAVORITE,
             SERVICE_SET_FAVORITE,
+            SERVICE_SET_SLEEP_TIMER,
             async_setup_entry,
         )
 
@@ -258,13 +269,24 @@ class TestServiceRegistration:
             for call in platform.async_register_entity_service.call_args_list
         }
 
-        assert set(registered) == {SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE}
+        assert set(registered) == {
+            SERVICE_SET_FAVORITE,
+            SERVICE_SAVE_FAVORITE,
+            SERVICE_SET_SLEEP_TIMER,
+        }
 
         for name, (_, schema, func) in registered.items():
-            # The method each service dispatches to has to exist on the entity.
-            assert hasattr(HatchBabyRestFavoriteSelect, func), name
-            # And every service takes the slot it is meant to act on.
-            assert "slot" in {str(key) for key in schema}, name
+            # The method each service dispatches to has to exist on the
+            # entity it is meant for.
+            entity = (
+                HatchBabyRestTimerSelect
+                if name == SERVICE_SET_SLEEP_TIMER
+                else HatchBabyRestFavoriteSelect
+            )
+            assert hasattr(entity, func), name
+            # And every favorite service takes the slot it is meant to act on.
+            if name != SERVICE_SET_SLEEP_TIMER:
+                assert "slot" in {str(key) for key in schema}, name
 
     def test_every_service_is_documented(self):
         """Test each registered service has an entry in services.yaml.
@@ -277,16 +299,25 @@ class TestServiceRegistration:
         from custom_components.hatch_rest.select import (
             SERVICE_SAVE_FAVORITE,
             SERVICE_SET_FAVORITE,
+            SERVICE_SET_SLEEP_TIMER,
         )
 
         documented = yaml.safe_load(
             pathlib.Path("custom_components/hatch_rest/services.yaml").read_text()
         )
 
-        assert set(documented) == {SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE}
+        assert set(documented) == {
+            SERVICE_SET_FAVORITE,
+            SERVICE_SAVE_FAVORITE,
+            SERVICE_SET_SLEEP_TIMER,
+        }
         for name, spec in documented.items():
             assert spec["target"]["entity"]["domain"] == "select", name
-            assert spec["fields"]["slot"]["required"] is True, name
+        for name in (SERVICE_SET_FAVORITE, SERVICE_SAVE_FAVORITE):
+            assert documented[name]["fields"]["slot"]["required"] is True, name
+        timer = documented[SERVICE_SET_SLEEP_TIMER]["fields"]["duration"]
+        assert timer["required"] is True
+        assert "duration" in timer["selector"]
 
     def test_service_schema_offers_every_sound(self):
         """Test the documented sound list matches the enum.
@@ -301,3 +332,117 @@ class TestServiceRegistration:
         )["set_favorite"]["fields"]["sound"]["selector"]["select"]["options"]
 
         assert documented == [sound.name for sound in PyHatchBabyRestSound]
+
+
+class TestHatchBabyRestTimerSelect:
+    """Tests for HatchBabyRestTimerSelect."""
+
+    @pytest.fixture
+    def timer(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ) -> HatchBabyRestTimerSelect:
+        """Return the timer control over a device that keeps what SD sets."""
+        device = mock_coordinator.hatch_rest_device
+        device.timer_remaining = None
+        device.timer_expires_at = None
+
+        async def set_timer(seconds):
+            if seconds:
+                device.timer_remaining = seconds
+                device.timer_expires_at = monotonic() + seconds
+            else:
+                device.timer_remaining = None
+                device.timer_expires_at = None
+
+        device.async_set_timer = AsyncMock(side_effect=set_timer)
+        entity = HatchBabyRestTimerSelect(mock_coordinator)
+        entity.hass = mock_coordinator.hass
+        return entity
+
+    def test_is_off_with_no_timer(self, timer: HatchBabyRestTimerSelect):
+        """Test an idle device shows Off, and offers no Custom."""
+        assert timer.current_option == TIMER_OFF
+        assert timer.options == [TIMER_OFF, *TIMER_PRESETS]
+        assert timer.name == "Hatch Rest Sleep Timer"
+        assert timer.unique_id == "aabbccddeeff_timer"
+
+    @pytest.mark.asyncio
+    async def test_a_preset_starts_that_timer_and_shows_it(
+        self, timer: HatchBabyRestTimerSelect
+    ):
+        """Test picking a preset sends its seconds and then shows it."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("1.5 hours")
+
+        timer._hatch_rest_device.async_set_timer.assert_awaited_once_with(5400)
+        assert timer.current_option == "1.5 hours"
+
+    @pytest.mark.asyncio
+    async def test_off_cancels(self, timer: HatchBabyRestTimerSelect):
+        """Test Off sends zero."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("1 hour")
+            await timer.async_select_option(TIMER_OFF)
+
+        timer._hatch_rest_device.async_set_timer.assert_awaited_with(0)
+        assert timer.current_option == TIMER_OFF
+
+    def test_a_timer_from_elsewhere_is_custom(self, timer: HatchBabyRestTimerSelect):
+        """Test a timer the app started shows as Custom, and can be seen."""
+        device = timer._hatch_rest_device
+        device.timer_remaining = 21076
+        device.timer_expires_at = monotonic() + 21076
+
+        assert timer.current_option == TIMER_CUSTOM
+        assert TIMER_CUSTOM in timer.options
+
+    @pytest.mark.asyncio
+    async def test_the_app_replacing_a_preset_shows_custom(
+        self, timer: HatchBabyRestTimerSelect
+    ):
+        """Test a preset stops showing once a different timer replaces it."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_select_option("1 hour")
+
+        device = timer._hatch_rest_device
+        device.timer_remaining = 60
+        device.timer_expires_at = monotonic() + 60
+
+        assert timer.current_option == TIMER_CUSTOM
+
+    @pytest.mark.asyncio
+    async def test_choosing_custom_does_nothing(self, timer: HatchBabyRestTimerSelect):
+        """Test Custom is only ever shown, never sent."""
+        await timer.async_select_option(TIMER_CUSTOM)
+
+        timer._hatch_rest_device.async_set_timer.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_action_sets_an_exact_duration(
+        self, timer: HatchBabyRestTimerSelect
+    ):
+        """Test the action sends any duration, and a preset one shows as such."""
+        with patch.object(timer, "async_write_ha_state"):
+            await timer.async_set_sleep_timer(timedelta(hours=1, minutes=5, seconds=7))
+            assert timer.current_option == TIMER_CUSTOM
+
+            await timer.async_set_sleep_timer(timedelta(minutes=30))
+            assert timer.current_option == "30 minutes"
+
+        timer._hatch_rest_device.async_set_timer.assert_any_await(3907)
+
+    def test_the_action_takes_what_the_duration_picker_sends(self):
+        """Test the picker's hours, minutes and seconds are accepted."""
+        schema = vol.Schema(SET_SLEEP_TIMER_SCHEMA)
+
+        assert schema({"duration": {"hours": 2, "minutes": 3, "seconds": 4}}) == {
+            "duration": timedelta(hours=2, minutes=3, seconds=4)
+        }
+        assert schema({"duration": "0:00:00"})["duration"] == timedelta(0)
+
+    def test_the_action_refuses_what_sd_cannot_hold(self):
+        """Test a duration past four hex digits of seconds is refused up front."""
+        schema = vol.Schema(SET_SLEEP_TIMER_SCHEMA)
+
+        with pytest.raises(vol.Invalid):
+            schema({"duration": {"hours": 18, "minutes": 13}})

@@ -35,27 +35,25 @@ class TestSensorSetup:
 class TestHatchBabyRestTimerSensor:
     """Tests for HatchBabyRestTimerSensor."""
 
-    def test_reports_the_minutes_left(
-        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    @pytest.mark.parametrize(
+        ("seconds", "shown"),
+        [
+            (21076, "5:51:16"),
+            (3600, "1:00:00"),
+            (252, "0:04:12"),
+            (1, "0:00:01"),
+            (None, "Off"),
+        ],
+    )
+    def test_shows_hours_minutes_and_seconds_or_off(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator, seconds, shown
     ):
-        """Test the sensor follows what the device layer counts down."""
-        mock_coordinator.hatch_rest_device.timer_remaining = 12
+        """Test the time left reads as H:MM:SS, and Off with no timer."""
+        mock_coordinator.hatch_rest_device.timer_remaining = seconds
 
-        assert HatchBabyRestTimerSensor(mock_coordinator).native_value == 12
+        assert HatchBabyRestTimerSensor(mock_coordinator).native_value == shown
 
-    def test_reports_nothing_when_no_timer_is_running(
-        self, mock_coordinator: HatchBabyRestUpdateCoordinator
-    ):
-        """Test an idle device reports no value rather than zero.
-
-        Zero minutes left is a timer about to fire, which is not the same as
-        having none set.
-        """
-        mock_coordinator.hatch_rest_device.timer_remaining = None
-
-        assert HatchBabyRestTimerSensor(mock_coordinator).native_value is None
-
-    def test_ticks_write_only_when_the_minute_moves(
+    def test_ticks_write_only_when_what_it_shows_moves(
         self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
     ):
         """Test the countdown shows between coordinator updates, without spam.

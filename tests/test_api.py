@@ -1889,7 +1889,7 @@ class TestPyHatchBabyRestAsync:
         with patch.object(api, "_write_list_command", side_effect=answer):
             await api.async_refresh_timer()
 
-        assert api.timer_remaining == 176
+        assert api.timer_remaining == 10546
         assert api.timer_total is None
 
     def test_feedback_is_logged_raw_when_more_than_the_clock_moves(
@@ -1949,7 +1949,7 @@ class TestPyHatchBabyRestAsync:
             await api.async_refresh_timer()
 
         assert asked == ["GI", "GD"]
-        assert api.timer_remaining == 176
+        assert api.timer_remaining == 10546
 
     @staticmethod
     def _timer_answers(api: PyHatchBabyRestAsync, gd: bytes | None = None):
@@ -1984,7 +1984,7 @@ class TestPyHatchBabyRestAsync:
             await api.async_set_timer(9 * 3600)
 
         assert sent == ["SD7E90", "GI", "GD"]
-        assert api.timer_remaining == 540
+        assert api.timer_remaining == 32400
         assert "reports" not in caplog.text
 
     @pytest.mark.asyncio
@@ -2067,17 +2067,21 @@ class TestPyHatchBabyRestAsync:
             await api.async_refresh_timer()
 
         # 0x258 seconds is ten minutes.
-        assert api.timer_remaining == 10
+        assert api.timer_remaining == 600
 
         # Five minutes later, without having asked anything.
         api._timer_expires_at -= 5 * 60
-        assert api.timer_remaining == 5
+        assert api.timer_remaining == 300
 
-    def test_timer_never_reads_below_zero(self, api: PyHatchBabyRestAsync):
-        """Test an expired timer reads as zero rather than negative."""
+    def test_a_timer_that_has_run_out_is_no_timer(self, api: PyHatchBabyRestAsync):
+        """Test an expired timer reads as none, not as zero or negative.
+
+        It sat at zero until the next reconnect otherwise, where an idle
+        device reads as none -- two ways of saying the same thing.
+        """
         api._timer_expires_at = monotonic() - 600
 
-        assert api.timer_remaining == 0
+        assert api.timer_remaining is None
 
     @pytest.mark.asyncio
     async def test_refresh_timer_survives_an_answer_it_cannot_read(

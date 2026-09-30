@@ -177,18 +177,20 @@ A running timer also shows in the state payload: the `e` block after the power b
 `80 00 00 00` on that device and `00 00 00 00` on every idle one. Only one capture so far, so what
 the other bytes carry is **unknown**.
 
-### Setting it — `SD{SSSS}`, **unconfirmed**
+### Setting it — `SD{SSSS}`, **Confirmed**
 
-Both sources document it as setting the timer in seconds, four hex digits, and neither says it was
-tested. Four attempts here, on two devices — `SD00b4`, `SD00b4`, `SD0960`, `SD01e0` — were each
-acknowledged with `OK`, and neither device switched off when its timer should have elapsed, with
-the light on and sound playing throughout.
+`SD` takes the time in **seconds**, four **uppercase** hex digits, and `SD0000` cancels. It is
+acknowledged with `OK`, like every command.
 
-Those attempts were judged partly by `GI` answering `FF` straight afterwards, which is now known to
-say nothing about the timer. Seconds, which `GD` turned out to use, is consistent with what the
-notes say `SD` takes. The integration now sends it in **uppercase** hex — as `GD` answers, and as
-the one other implementation writes a program's duration (`ESD{SSSS}`) — and reads `GD` straight
-afterwards, warning if the two disagree by more than a minute.
+**Confirmed** end to end: `SD003C` sent to a device that was playing, with light on. `GD` answered
+`003C` straight afterwards, the `e` block after the power byte read `0x80` while it ran, and the
+device switched itself off 61 seconds after the command was sent — the power byte went
+to off, and `e` back to `0x00`. It replaced a timer the app had set, rather than adding to it.
+
+Four earlier attempts had looked ignored: `SD00b4`, `SD00b4`, `SD0960`, `SD01e0`, all acknowledged,
+with neither device switching off. They were lowercase — though `SD0960` has no hex letters — and
+were judged partly by `GI` answering `FF` straight afterwards, which says nothing about the timer.
+Why they did not run is **unknown**; uppercase is what is known to work.
 
 Four hex digits of seconds hold up to 18h12m; the app offers at least nine hours.
 
@@ -434,4 +436,4 @@ check — its README links to reverse-engineering notes that were never committe
 | Program bytes 1-4 | a modified timestamp | the start time, read as UTC |
 | Program bytes 7-8 | the hour and minute | the duration, in seconds |
 | Program bytes 11-12 | padding | the app's Toddler Lock |
-| `SD` sets the sleep timer | in seconds, four hex digits | acknowledged; no timer seen to run, but only checked with `GI` |
+| `SD` sets the sleep timer | in seconds, four hex digits | works, in uppercase; lowercase attempts did not run |
