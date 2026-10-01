@@ -2519,6 +2519,84 @@ class TestPyHatchBabyRestAsync:
         assert api.power is False
 
     @pytest.mark.asyncio
+    async def test_a_command_that_cannot_connect_raises(
+        self, api: PyHatchBabyRestAsync
+    ):
+        """Test a command to an unreachable device fails rather than vanishing.
+
+        It used to be logged and dropped: a device unreachable all morning
+        took sound changes that went nowhere, and nothing said so.
+        """
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            pytest.raises(HatchRestConnectionError, match="could not be connected"),
+        ):
+            await api._send_command("SN00")
+
+        assert api._commands_in_flight == 0
+        assert api._active_operations == 0
+        # Nothing was sent, so the device's next report is not held off.
+        assert api._settle_until == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_command_the_link_drops_raises(self, api: PyHatchBabyRestAsync):
+        """Test a write that fails says which command did not go."""
+        api._client = AsyncMock()
+        api._client.write_gatt_char.side_effect = BleakConnectionError("gone")
+
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            pytest.raises(HatchRestConnectionError, match="did not take SN00"),
+        ):
+            await api._send_command("SN00")
+
+        assert api._commands_in_flight == 0
+
+    def test_the_error_shows_in_home_assistant(self):
+        """Test the failure is one Home Assistant reports where it was asked for."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        assert issubclass(HatchRestConnectionError, HomeAssistantError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call", "field", "before"),
+        [
+            (lambda api: api.set_sound(0), "sound", PyHatchBabyRestSound.rain),
+            (lambda api: api.set_volume(10), "volume", 94),
+            (lambda api: api.turn_power_off(), "power", True),
+            (lambda api: api.set_active_favorite(3), "active_favorite", None),
+            (lambda api: api.set_brightness(0), "brightness", 127),
+        ],
+    )
+    async def test_a_failed_command_puts_the_state_back(
+        self, api: PyHatchBabyRestAsync, call, field, before
+    ):
+        """Test what was shown optimistically is undone when the command fails.
+
+        Otherwise Home Assistant shows the device doing what it never heard.
+        """
+        api.update_from_advertisement(ADVERTISEMENT)
+        api.sound, api.volume, api.power, api.brightness = (
+            PyHatchBabyRestSound.rain,
+            94,
+            True,
+            127,
+        )
+        published = MagicMock()
+        api.set_state_changed_callback(published)
+
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            pytest.raises(HatchRestConnectionError),
+        ):
+            await call(api)
+
+        assert getattr(api, field) == before
+        # Once for the optimistic change, once to take it back.
+        assert published.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_send_command_keeps_the_connection(self, api: PyHatchBabyRestAsync):
         """Test a command leaves the connection up for the next one."""
         mock_client = AsyncMock()

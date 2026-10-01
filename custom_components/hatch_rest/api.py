@@ -16,6 +16,7 @@ import struct
 from time import monotonic
 
 from bleak.backends.device import BLEDevice
+from homeassistant.exceptions import HomeAssistantError
 from bleak_retry_connector import (
     BleakAbortedError,
     BleakClientWithServiceCache,
@@ -98,8 +99,12 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class HatchRestConnectionError(Exception):
-    """Raised when the device could not be reached."""
+class HatchRestConnectionError(HomeAssistantError):
+    """Raised when the device could not be reached.
+
+    A Home Assistant error, so that an action which could not reach the
+    device says so where it was asked for, rather than only in the log.
+    """
 
 
 def _assert_marker(data: bytes, index: int, marker: int):
@@ -898,9 +903,12 @@ class PyHatchBabyRestAsync:
         return self._apply_state(state, "advertisement", received_at)
 
     async def _send_command(self, command: str):
-        """Send a command do the device.
+        """Send a command to the device.
 
-        :param command: The command to send.
+        Raises HatchRestConnectionError if it could not be sent. It used to be
+        logged and dropped, which left whatever had been applied
+        optimistically showing as done: a device unreachable all morning took
+        sound changes that went nowhere, and nothing said so.
         """
         if log_timing := _LOGGER.isEnabledFor(logging.DEBUG):
             start = monotonic()
@@ -912,27 +920,36 @@ class PyHatchBabyRestAsync:
         # completes: connecting can take seconds, and an advertisement still
         # describing the old state would undo what was optimistically applied.
         self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
-        await self._client_connect()
 
         try:
-            await self._client.write_gatt_char(  # pyright: ignore[reportOptionalMemberAccess]
+            await self._client_connect()
+            if self._client is None:
+                raise HatchRestConnectionError(f"{self.address} could not be connected")
+
+            await self._client.write_gatt_char(
                 char_specifier=CHAR_TX,
                 data=bytearray(command, "utf-8"),
                 response=True,
             )
 
-        except (
-            BleakNotFoundError,
-            BleakOutOfConnectionSlotsError,
-            BleakAbortedError,
-            BleakConnectionError,
-            Exception,  # noqa: BLE001
-        ) as e:
-            _LOGGER.warning("Exception during _send_command -- %r", e)
+        except HatchRestConnectionError:
+            # Nothing was sent, so nothing settles: let the next report from
+            # the device stand straight away.
+            self._settle_until = 0.0
+            raise
 
-        self._commands_in_flight -= 1
-        self._set_active_operations(-1)
-        self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
+        except Exception as e:
+            self._settle_until = 0.0
+            raise HatchRestConnectionError(
+                f"{self.address} did not take {command} -- {e!r}"
+            ) from e
+
+        else:
+            self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
+
+        finally:
+            self._commands_in_flight -= 1
+            self._set_active_operations(-1)
 
         if log_timing:
             _LOGGER.debug(
@@ -1623,6 +1640,27 @@ class PyHatchBabyRestAsync:
                     monotonic() - start,  # pyright: ignore[reportPossiblyUnboundVariable]
                 )
 
+    async def _send_state_command(self, command: str, **state) -> None:
+        """Apply state optimistically, send the command, and undo it on failure.
+
+        Applied first so the entities follow at once rather than after a
+        connection that can take seconds. Put back if the command does not go
+        through, so a device that could not be reached is not shown as having
+        done what was asked.
+        """
+        previous = {field: getattr(self, field) for field in state}
+        for field, value in state.items():
+            setattr(self, field, value)
+        self._notify_state_changed()
+
+        try:
+            await self._send_command(command)
+        except HatchRestConnectionError:
+            for field, value in previous.items():
+                setattr(self, field, value)
+            self._notify_state_changed()
+            raise
+
     async def set_active_favorite(self, slot: int | None):
         """Play a stored favorite, or none of them.
 
@@ -1633,41 +1671,31 @@ class PyHatchBabyRestAsync:
         """
         command = f"SP{slot or 0:02x}"
         _LOGGER.debug("API command: set_active_favorite(%s)", slot)
-        self.active_favorite = slot
-        self._notify_state_changed()
-        await self._send_command(command)
+        await self._send_state_command(command, active_favorite=slot)
 
     async def turn_power_on(self):
         """Power on the Hatch Rest device."""
         command = f"SI{1:02x}"
         _LOGGER.debug("API command: turn_power_on")
-        self.power = True
-        self._notify_state_changed()
-        await self._send_command(command)
+        await self._send_state_command(command, power=True)
 
     async def turn_power_off(self):
         """Power off the Hatch Rest device."""
         command = f"SI{0:02x}"
         _LOGGER.debug("API command: turn_power_off")
-        self.power = False
-        self._notify_state_changed()
-        await self._send_command(command)
+        await self._send_state_command(command, power=False)
 
     async def set_sound(self, sound: int):
         """Set the sound of the Hatch Rest device."""
         command = f"SN{sound:02x}"
         _LOGGER.debug("API command: set_sound to %s", command)
-        self.sound = PyHatchBabyRestSound(sound)
-        self._notify_state_changed()
-        return await self._send_command(command)
+        await self._send_state_command(command, sound=PyHatchBabyRestSound(sound))
 
     async def set_volume(self, volume: int):
         """Set the volume of the Hatch Rest device."""
         command = f"SV{volume:02x}"
         _LOGGER.debug("API command: set_volume to %s", command)
-        self.volume = volume
-        self._notify_state_changed()
-        return await self._send_command(command)
+        await self._send_state_command(command, volume=volume)
 
     async def set_color(self, red: int, green: int, blue: int):
         """Set the color of the Hatch Rest device."""
@@ -1693,10 +1721,9 @@ class PyHatchBabyRestAsync:
         # Keep the cache in step with what was just written: set_color and
         # set_brightness each build their command from the other's cached
         # value, so a stale cache would make consecutive calls fight.
-        self.color = (red, green, blue)
-        self.brightness = brightness
-        self._notify_state_changed()
-        return await self._send_command(command)
+        await self._send_state_command(
+            command, color=(red, green, blue), brightness=brightness
+        )
 
     @property
     def name(self):
