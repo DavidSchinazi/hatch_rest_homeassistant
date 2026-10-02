@@ -3,10 +3,12 @@
     "step": {
       "init": {
         "title": "Configure",
-        "description": "Edit a favorite or a program stored on this Hatch Rest.",
+        "description": "Edit a favorite or a program stored on this Hatch Rest, or copy them from another.",
         "menu_options": {
           "favorites": "Set Favorite",
-          "programs": "Set Program"
+          "programs": "Set Program",
+          "copy_favorites": "Copy Favorites From Other Device",
+          "copy_programs": "Copy Programs From Other Device"
         }
       },
       "favorites": {
@@ -49,18 +51,53 @@
           "volume": "Volume",
           "toddler_lock": "Toddler Lock"
         }
+      },
+      "copy_favorites": {
+        "title": "Copy Favorites From Other Device",
+        "description": "Choose the Hatch Rest to copy favorites from. Only those connected now are listed.",
+        "data": {
+          "source": "Copy from"
+        }
+      },
+      "copy_favorite_slots": {
+        "title": "Copy Favorites From {source}",
+        "description": "Each favorite ticked is copied into the same slot here, replacing what that slot holds.",
+        "data": {
+          "slots": "Favorites"
+        }
+      },
+      "copy_programs": {
+        "title": "Copy Programs From Other Device",
+        "description": "Choose the Hatch Rest to copy programs from. Only those connected now are listed.",
+        "data": {
+          "source": "Copy from"
+        }
+      },
+      "copy_program_slots": {
+        "title": "Copy Programs From {source}",
+        "description": "Each program ticked is copied into the same slot here, replacing what that slot holds. Empty slots are not listed, since a slot cannot be emptied.",
+        "data": {
+          "slots": "Programs"
+        }
       }
     },
     "error": {
       "write_failed": "The Hatch Rest did not take the program. Nothing was changed; check the logs and try again.",
       "duration_too_long": "A program can run for at most 18:12:15.",
       "name_invalid": "Use 1 to 15 plain characters, without accents.",
-      "favorite_write_failed": "The Hatch Rest did not take the favorite. Nothing was changed; check the logs and try again."
+      "favorite_write_failed": "The Hatch Rest did not take the favorite. Nothing was changed; check the logs and try again.",
+      "nothing_selected": "Tick at least one to copy.",
+      "copy_failed": "Slot {failed} could not be written, so the copy stopped there. Those already copied are unticked; check the logs and try again."
     },
     "abort": {
       "not_loaded": "The Hatch Rest is not set up yet.",
       "programs_unread": "The programs have not been read from the Hatch Rest yet. Wait for it to connect, then try again.",
-      "favorites_unread": "The favorites have not been read from the Hatch Rest yet. Wait for it to connect, then try again."
+      "favorites_unread": "The favorites have not been read from the Hatch Rest yet. Wait for it to connect, then try again.",
+      "no_other_devices": "No other Hatch Rest is connected to copy from.",
+      "source_not_loaded": "The Hatch Rest to copy from is no longer connected.",
+      "source_favorites_unread": "The favorites have not been read from {source} yet. Wait for it to connect, then try again.",
+      "source_programs_unread": "The programs have not been read from {source} yet. Wait for it to connect, then try again.",
+      "source_programs_empty": "{source} holds no programs to copy."
     }
   }
 }

@@ -357,6 +357,85 @@ def _favorite_changes(form: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _favorite_read(favorite: dict) -> bool:
+    """Return whether a favorite's contents have been read from the device."""
+    return "color" in favorite
+
+
+def _favorite_options(favorites: dict[int, dict]) -> list[SelectOptionDict]:
+    """Return the favorites read, labelled by what they hold."""
+    options = []
+    for slot in range(1, FAVORITE_SLOTS + 1):
+        favorite = favorites.get(slot, {})
+        if not _favorite_read(favorite):
+            continue
+        sound = favorite["sound"]
+        sound_label = (
+            sound.name if sound is not None else f"sound {favorite['sound_id']}"
+        )
+        red, green, blue = favorite["color"]
+        state = "on" if favorite["enabled"] else "off"
+        label = (
+            f"{slot}: {favorite.get('name') or f'Favorite {slot}'} "
+            f"(#{red:02X}{green:02X}{blue:02X}, {sound_label}, {state})"
+        )
+        options.append(SelectOptionDict(value=str(slot), label=label))
+    return options
+
+
+def _program_options(
+    programs: dict[int, dict], *, include_empty: bool
+) -> list[SelectOptionDict]:
+    """Return the programs read, labelled by name and time."""
+    options = []
+    for slot in range(1, PROGRAM_SLOTS + 1):
+        program = programs.get(slot, {})
+        if "empty" not in program:
+            continue
+        if program["empty"]:
+            if not include_empty:
+                continue
+            label = f"{slot}: empty"
+        else:
+            state = "on" if program.get("enabled") else "off"
+            label = f"{slot}: {program.get('name') or 'unnamed'} ({program['time']}, {state})"
+        options.append(SelectOptionDict(value=str(slot), label=label))
+    return options
+
+
+def _favorite_copy(favorite: dict) -> dict[str, Any]:
+    """Return a favorite read from one device as async_set_favorite takes it."""
+    return {
+        "enabled": favorite["enabled"],
+        "color": favorite["color"],
+        "brightness": favorite["brightness"],
+        # The raw id, so a sound with no name here is copied as it is.
+        "sound": favorite["sound_id"],
+        "volume": favorite["volume"],
+    }
+
+
+def _program_copy(slot: int, program: dict) -> dict[str, Any]:
+    """Return a program read from one device as async_set_program takes it.
+
+    Every field is given, the name included: one left out would be kept from
+    the slot being written over rather than taken from the one copied.
+    """
+    start = program["start_timestamp"] % 86400
+    return {
+        "enabled": program["enabled"],
+        "name": program.get("name") or f"Program {slot}",
+        "start": time(start // 3600, start // 60 % 60, start % 60),
+        "duration_seconds": program["duration_seconds"],
+        "days_mask": program["days_mask"],
+        "color": program["color"],
+        "brightness": program["brightness"],
+        "sound": program["sound_id"],
+        "volume": program["volume"],
+        "toddler_lock": program["toddler_lock"],
+    }
+
+
 class HatchBabyRestOptionsFlow(OptionsFlow):
     """Edit the favorites and programs stored on a Hatch Rest.
 
@@ -368,6 +447,8 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
     def __init__(self) -> None:
         """Initialize the editor."""
         self._slot: int | None = None
+        # The device copied from, by its entry.
+        self._source: ConfigEntry | None = None
 
     @property
     def _device(self) -> PyHatchBabyRestAsync:
@@ -376,11 +457,12 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose whether to edit a favorite or a program."""
+        """Choose whether to edit a favorite or a program, or copy them."""
         if self.config_entry.state is not ConfigEntryState.LOADED:
             return self.async_abort(reason="not_loaded")
         return self.async_show_menu(
-            step_id="init", menu_options=["favorites", "programs"]
+            step_id="init",
+            menu_options=["favorites", "programs", "copy_favorites", "copy_programs"],
         )
 
     async def async_step_favorites(
@@ -388,30 +470,14 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Choose which favorite to edit."""
         favorites = self._device.favorites
-        if not any("color" in favorite for favorite in favorites.values()):
+        if not any(_favorite_read(favorite) for favorite in favorites.values()):
             return self.async_abort(reason="favorites_unread")
 
         if user_input is not None:
             self._slot = int(user_input["favorite"])
             return await self.async_step_favorite()
 
-        options = []
-        for slot in range(1, FAVORITE_SLOTS + 1):
-            favorite = favorites.get(slot, {})
-            if "color" not in favorite:
-                continue
-            sound = favorite["sound"]
-            sound_label = (
-                sound.name if sound is not None else f"sound {favorite['sound_id']}"
-            )
-            red, green, blue = favorite["color"]
-            state = "on" if favorite["enabled"] else "off"
-            label = (
-                f"{slot}: {favorite.get('name') or f'Favorite {slot}'} "
-                f"(#{red:02X}{green:02X}{blue:02X}, {sound_label}, {state})"
-            )
-            options.append(SelectOptionDict(value=str(slot), label=label))
-
+        options = _favorite_options(favorites)
         return self.async_show_form(
             step_id="favorites",
             data_schema=vol.Schema(
@@ -463,18 +529,7 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
             self._slot = int(user_input["program"])
             return await self.async_step_program()
 
-        options = []
-        for slot in range(1, PROGRAM_SLOTS + 1):
-            program = programs.get(slot, {})
-            if "empty" not in program:
-                continue
-            if program["empty"]:
-                label = f"{slot}: empty"
-            else:
-                state = "on" if program.get("enabled") else "off"
-                label = f"{slot}: {program.get('name') or 'unnamed'} ({program['time']}, {state})"
-            options.append(SelectOptionDict(value=str(slot), label=label))
-
+        options = _program_options(programs, include_empty=True)
         return self.async_show_form(
             step_id="programs",
             data_schema=vol.Schema(
@@ -518,4 +573,176 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
             data_schema=self.add_suggested_values_to_schema(PROGRAM_SCHEMA, values),
             errors=errors,
             description_placeholders={"slot": str(self._slot)},
+        )
+
+    def _other_devices(self) -> dict[str, ConfigEntry]:
+        """Return the other Hatches set up and connected, by entry id."""
+        return {
+            entry.entry_id: entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            if entry.entry_id != self.config_entry.entry_id
+            and entry.state is ConfigEntryState.LOADED
+        }
+
+    async def _async_step_source(
+        self, step_id: str, next_step, user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        """Choose which other Hatch to copy from."""
+        others = self._other_devices()
+        if not others:
+            return self.async_abort(reason="no_other_devices")
+
+        if user_input is not None:
+            self._source = others[user_input["source"]]
+            return await next_step()
+
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema(
+                {
+                    vol.Required("source"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value=entry_id, label=entry.title)
+                                for entry_id, entry in others.items()
+                            ],
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def _async_step_copy_slots(
+        self,
+        step_id: str,
+        options: list[SelectOptionDict],
+        write,
+        user_input: dict[str, Any] | None,
+    ) -> ConfigFlowResult:
+        """Choose which slots to copy, all of them to begin with, and copy them.
+
+        Each goes to the same slot it came from. A write that fails stops the
+        copy there, since whatever kept it from the device is likely to keep
+        the rest from it too; those already copied are unticked, so trying
+        again carries on from the one that failed.
+        """
+        assert self._source is not None
+        errors: dict[str, str] = {}
+        placeholders = {"source": self._source.title, "failed": ""}
+        selected = [option["value"] for option in options]
+
+        if user_input is not None:
+            selected = list(user_input["slots"])
+            if not selected:
+                errors["base"] = "nothing_selected"
+            for slot in list(selected):
+                try:
+                    await write(int(slot))
+                except (HatchRestConnectionError, ValueError) as err:
+                    _LOGGER.warning("Copying %s %s failed: %s", step_id, slot, err)
+                    errors["base"] = "copy_failed"
+                    placeholders["failed"] = slot
+                    break
+                selected.remove(slot)
+            if not errors:
+                return self.async_create_entry(data=dict(self.config_entry.options))
+
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required("slots"): SelectSelector(
+                            SelectSelectorConfig(
+                                options=options,
+                                multiple=True,
+                                mode=SelectSelectorMode.LIST,
+                            )
+                        )
+                    }
+                ),
+                {"slots": selected},
+            ),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
+    async def async_step_copy_favorites(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which other Hatch to copy favorites from."""
+        return await self._async_step_source(
+            "copy_favorites", self.async_step_copy_favorite_slots, user_input
+        )
+
+    async def async_step_copy_favorite_slots(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which favorites to copy, and copy them."""
+        assert self._source is not None
+        if self._source.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="source_not_loaded")
+        favorites = self._source.runtime_data.hatch_rest_device.favorites
+        options = _favorite_options(favorites)
+        if not options:
+            return self.async_abort(
+                reason="source_favorites_unread",
+                description_placeholders={"source": self._source.title},
+            )
+
+        async def write(slot: int) -> None:
+            await self._device.async_set_favorite(
+                slot, **_favorite_copy(favorites[slot])
+            )
+
+        return await self._async_step_copy_slots(
+            "copy_favorite_slots", options, write, user_input
+        )
+
+    async def async_step_copy_programs(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which other Hatch to copy programs from."""
+        return await self._async_step_source(
+            "copy_programs", self.async_step_copy_program_slots, user_input
+        )
+
+    async def async_step_copy_program_slots(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which programs to copy, and copy them.
+
+        Only programs that hold something are offered: there is no known way
+        to empty a slot, so an empty one cannot be copied over a full one.
+        """
+        assert self._source is not None
+        if self._source.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="source_not_loaded")
+        programs = self._source.runtime_data.hatch_rest_device.programs
+        if not any("empty" in program for program in programs.values()):
+            return self.async_abort(
+                reason="source_programs_unread",
+                description_placeholders={"source": self._source.title},
+            )
+        # Whether a program is enabled is read separately from the rest, and
+        # copying one without it would turn it off or on by guesswork.
+        options = [
+            option
+            for option in _program_options(programs, include_empty=False)
+            if "enabled" in programs[int(option["value"])]
+        ]
+        if not options:
+            return self.async_abort(
+                reason="source_programs_empty",
+                description_placeholders={"source": self._source.title},
+            )
+
+        async def write(slot: int) -> None:
+            await self._device.async_set_program(
+                slot, **_program_copy(slot, programs[slot])
+            )
+
+        return await self._async_step_copy_slots(
+            "copy_program_slots", options, write, user_input
         )

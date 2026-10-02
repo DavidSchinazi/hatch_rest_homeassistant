@@ -103,6 +103,18 @@ and read back. An empty slot can be filled in the same way.
 
 The switch for each program turns it on or off without opening the editor.
 
+## 📋 Copying Between Devices
+
+Favorites and programs can be copied from one Hatch Rest to another. Press
+**Configure** on the entry of the device to copy *to*, choose **Copy Favorites
+From Other Device** or **Copy Programs From Other Device**, then the device to
+copy from. Every favorite or program it holds is listed, all ticked; untick
+any to leave out. Each one is written into the same slot on this device,
+replacing what is there, and read back.
+
+Only devices connected at the time are offered. Empty program slots are not
+listed, since there is no known way to empty a slot on the device.
+
 ## 📡 Bluetooth
 
 Because the Hatch Rest is a BLE device, a compatible Home Assistant Bluetooth

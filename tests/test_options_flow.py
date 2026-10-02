@@ -104,7 +104,12 @@ async def test_asks_favorite_or_program_first(
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["favorites", "programs"]
+    assert result["menu_options"] == [
+        "favorites",
+        "programs",
+        "copy_favorites",
+        "copy_programs",
+    ]
 
 
 @pytest.mark.asyncio
@@ -373,3 +378,209 @@ async def test_waits_for_the_favorites_to_be_read(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "favorites_unread"
+
+
+# Favorite 5 on another device: (24, 20, 255) at 0xff, a sound with no name
+# here (0x0f), volume 0x07, not offered.
+FAVORITE_5 = _parse_favorite_block(bytes.fromhex("010f07000000000000ff1814ff1603"))
+# A program whose name and status have not been read.
+UNNAMED = _parse_program_block(
+    bytes.fromhex("01d47bbd6a0530100e0000ff01400000ff002adf")
+)
+
+
+@pytest.fixture
+def source(hass: HomeAssistant) -> MockConfigEntry:
+    """Return another loaded Hatch to copy from."""
+    other = MagicMock()
+    other.favorites = {2: dict(FAVORITE_2), 5: dict(FAVORITE_5)}
+    other.programs = {
+        3: {**TEST_A, "name": "Bed Time"},
+        5: dict(TEST_A),
+        7: dict(EMPTY),
+        8: dict(UNNAMED),
+    }
+    source = MockConfigEntry(
+        domain=DOMAIN,
+        title="Nest Nightstand",
+        unique_id="e62d3df92926",
+        data={CONF_ADDRESS: "E6:2D:3D:F9:29:26"},
+        state=ConfigEntryState.LOADED,
+    )
+    source.add_to_hass(hass)
+    source.runtime_data = MagicMock(hatch_rest_device=other)
+    return source
+
+
+def _labels(result, field: str) -> list[str]:
+    """Return the labels a selector field offers."""
+    return [
+        option["label"]
+        for option in result["data_schema"].schema[field].config["options"]
+    ]
+
+
+async def _open_copy(
+    hass: HomeAssistant, entry: MockConfigEntry, source: MockConfigEntry, kind: str
+):
+    """Open the copy of favorites or programs, choosing the source device."""
+    flow = _flow(hass, entry)
+    step = getattr(flow, f"async_step_copy_{kind}")
+    await step()
+    return flow, await step({"source": source.entry_id})
+
+
+@pytest.mark.asyncio
+async def test_copy_lists_the_other_connected_devices(
+    hass: HomeAssistant, entry: MockConfigEntry, source: MockConfigEntry
+):
+    """Test the source step offers other loaded Hatches, not this one."""
+    MockConfigEntry(
+        domain=DOMAIN, title="Unplugged", state=ConfigEntryState.NOT_LOADED
+    ).add_to_hass(hass)
+
+    result = await _flow(hass, entry).async_step_copy_favorites()
+
+    assert result["step_id"] == "copy_favorites"
+    assert _labels(result, "source") == ["Nest Nightstand"]
+
+
+@pytest.mark.asyncio
+async def test_copy_needs_another_device(hass: HomeAssistant, entry: MockConfigEntry):
+    """Test there is nothing to copy from with only one Hatch."""
+    result = await _flow(hass, entry).async_step_copy_programs()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_other_devices"
+
+
+@pytest.mark.asyncio
+async def test_copy_favorites_offers_each_ticked(
+    hass: HomeAssistant, entry: MockConfigEntry, source: MockConfigEntry
+):
+    """Test every favorite the source holds is listed, and ticked."""
+    _, result = await _open_copy(hass, entry, source, "favorites")
+
+    assert result["step_id"] == "copy_favorite_slots"
+    assert result["description_placeholders"]["source"] == "Nest Nightstand"
+    assert _labels(result, "slots") == [
+        "2: Favorite 2 (#FDD12D, ocean, on)",
+        "5: Favorite 5 (#FF1418, sound 15, off)",
+    ]
+    assert _suggested(result, "slots") == ["2", "5"]
+
+
+@pytest.mark.asyncio
+async def test_copy_favorites_writes_those_ticked(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    source: MockConfigEntry,
+    device: MagicMock,
+):
+    """Test each favorite ticked is written whole into the same slot here."""
+    flow, _ = await _open_copy(hass, entry, source, "favorites")
+
+    result = await flow.async_step_copy_favorite_slots({"slots": ["5"]})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {"kept": True}
+    device.async_set_favorite.assert_awaited_once_with(
+        5,
+        enabled=False,
+        color=(255, 20, 24),
+        brightness=0xFF,
+        sound=0x0F,
+        volume=0x07,
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_needs_something_ticked(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    source: MockConfigEntry,
+    device: MagicMock,
+):
+    """Test unticking everything is caught rather than copying nothing."""
+    flow, _ = await _open_copy(hass, entry, source, "favorites")
+
+    result = await flow.async_step_copy_favorite_slots({"slots": []})
+
+    assert result["errors"] == {"base": "nothing_selected"}
+    device.async_set_favorite.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_copy_stops_and_unticks_those_copied(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    source: MockConfigEntry,
+    device: MagicMock,
+):
+    """Test a write that fails stops the copy, leaving the rest to try again."""
+    device.async_set_program.side_effect = [None, HatchRestConnectionError("no")]
+    flow, _ = await _open_copy(hass, entry, source, "programs")
+
+    result = await flow.async_step_copy_program_slots({"slots": ["3", "5"]})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "copy_failed"}
+    assert result["description_placeholders"]["failed"] == "5"
+    assert _suggested(result, "slots") == ["5"]
+
+
+@pytest.mark.asyncio
+async def test_copy_programs_offers_only_those_held(
+    hass: HomeAssistant, entry: MockConfigEntry, source: MockConfigEntry
+):
+    """Test empty programs, and those not fully read, are not offered."""
+    _, result = await _open_copy(hass, entry, source, "programs")
+
+    assert result["step_id"] == "copy_program_slots"
+    assert _labels(result, "slots") == [
+        "3: Bed Time (21:15, on)",
+        "5: TestA (21:15, on)",
+    ]
+    assert _suggested(result, "slots") == ["3", "5"]
+
+
+@pytest.mark.asyncio
+async def test_copy_programs_writes_every_field(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    source: MockConfigEntry,
+    device: MagicMock,
+):
+    """Test a program is copied whole, its name included."""
+    flow, _ = await _open_copy(hass, entry, source, "programs")
+
+    result = await flow.async_step_copy_program_slots({"slots": ["3"]})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    device.async_set_program.assert_awaited_once_with(
+        3,
+        enabled=True,
+        name="Bed Time",
+        start=time(21, 15),
+        duration_seconds=3600,
+        days_mask=0x2A,
+        color=(255, 0, 0),
+        brightness=0x40,
+        sound=PyHatchBabyRestSound.ocean.value,
+        volume=0x30,
+        toddler_lock=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_stops_if_the_source_goes_away(
+    hass: HomeAssistant, entry: MockConfigEntry, source: MockConfigEntry
+):
+    """Test a source that disconnected after being chosen is not read."""
+    flow, _ = await _open_copy(hass, entry, source, "programs")
+    source.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+    result = await flow.async_step_copy_program_slots({"slots": ["3"]})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "source_not_loaded"
