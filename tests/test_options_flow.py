@@ -1,4 +1,4 @@
-"""Tests for the program editor behind the integration's Configure."""
+"""Tests for the favorite and program editor behind the integration's Configure."""
 
 from datetime import time
 from unittest.mock import AsyncMock, MagicMock
@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hatch_rest.api import (
     HatchRestConnectionError,
+    _parse_favorite_block,
     _parse_program_block,
 )
 from custom_components.hatch_rest.config_flow import HatchBabyRestOptionsFlow
@@ -26,13 +27,18 @@ TEST_A = {
     "enabled": True,
 }
 EMPTY = {**_parse_program_block(bytes.fromhex("01" + "00" * 19)), "enabled": False}
+# Favorite 2 as all four devices hold it: (253, 209, 45) at 0x7f, ocean at
+# 0x54, offered on the touch ring.
+FAVORITE_2 = _parse_favorite_block(bytes.fromhex("0105540000000000007f2dd1fdc003"))
 
 
 @pytest.fixture
 def device() -> MagicMock:
-    """Return a stand-in device holding TestA in slot 5 and nothing in 7."""
+    """Return a stand-in device holding favorite 2, TestA in slot 5 and nothing in 7."""
     device = MagicMock()
+    device.favorites = {2: dict(FAVORITE_2)}
     device.programs = {5: dict(TEST_A), 7: dict(EMPTY)}
+    device.async_set_favorite = AsyncMock()
     device.async_set_program = AsyncMock()
     return device
 
@@ -77,16 +83,50 @@ async def _open(hass: HomeAssistant, entry: MockConfigEntry, slot: str):
     """Open the editor and choose a program."""
     flow = _flow(hass, entry)
     await flow.async_step_init()
-    return flow, await flow.async_step_init({"program": slot})
+    await flow.async_step_programs()
+    return flow, await flow.async_step_programs({"program": slot})
+
+
+async def _open_favorite(hass: HomeAssistant, entry: MockConfigEntry, slot: str):
+    """Open the editor and choose a favorite."""
+    flow = _flow(hass, entry)
+    await flow.async_step_init()
+    await flow.async_step_favorites()
+    return flow, await flow.async_step_favorites({"favorite": slot})
+
+
+@pytest.mark.asyncio
+async def test_asks_favorite_or_program_first(
+    hass: HomeAssistant, entry: MockConfigEntry
+):
+    """Test the first step is a menu choosing what kind of slot to edit."""
+    result = await _flow(hass, entry).async_step_init()
+
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "init"
+    assert result["menu_options"] == ["favorites", "programs"]
+
+
+@pytest.mark.asyncio
+async def test_refuses_an_entry_that_is_not_loaded(
+    hass: HomeAssistant, entry: MockConfigEntry
+):
+    """Test the editor will not open while the device is not set up."""
+    entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+    result = await _flow(hass, entry).async_step_init()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "not_loaded"
 
 
 @pytest.mark.asyncio
 async def test_lists_the_programs(hass: HomeAssistant, entry: MockConfigEntry):
-    """Test the first step offers each program read, by name and time."""
-    result = await _flow(hass, entry).async_step_init()
+    """Test the program step offers each program read, by name and time."""
+    result = await _flow(hass, entry).async_step_programs()
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "init"
+    assert result["step_id"] == "programs"
     selector = result["data_schema"].schema["program"]
     assert [option["label"] for option in selector.config["options"]] == [
         "5: TestA (21:15, on)",
@@ -235,7 +275,101 @@ async def test_waits_for_the_programs_to_be_read(
     """Test the editor will not open before the programs have been read."""
     device.programs = {}
 
-    result = await _flow(hass, entry).async_step_init()
+    result = await _flow(hass, entry).async_step_programs()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "programs_unread"
+
+
+@pytest.mark.asyncio
+async def test_lists_the_favorites(hass: HomeAssistant, entry: MockConfigEntry):
+    """Test the favorite step offers each favorite read, by what it holds."""
+    result = await _flow(hass, entry).async_step_favorites()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "favorites"
+    selector = result["data_schema"].schema["favorite"]
+    assert [option["label"] for option in selector.config["options"]] == [
+        "2: Favorite 2 (#FDD12D, ocean, on)",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_favorite_form_starts_from_what_the_device_holds(
+    hass: HomeAssistant, entry: MockConfigEntry
+):
+    """Test every field is filled in with the favorite's current setting."""
+    _, result = await _open_favorite(hass, entry, "2")
+
+    assert result["step_id"] == "favorite"
+    assert result["description_placeholders"] == {"slot": "2"}
+    assert _suggested(result, "enabled") is True
+    assert _suggested(result, "color") == [253, 209, 45]
+    assert _suggested(result, "brightness") == 0x7F
+    assert _suggested(result, "sound") == "ocean"
+    assert _suggested(result, "volume") == 0x54
+
+
+@pytest.mark.asyncio
+async def test_saving_writes_the_whole_favorite(
+    hass: HomeAssistant, entry: MockConfigEntry, device: MagicMock
+):
+    """Test saving sends every field, and leaves the entry's options alone."""
+    flow, _ = await _open_favorite(hass, entry, "2")
+
+    result = await flow.async_step_favorite(
+        {
+            "enabled": False,
+            "color": [0, 128, 255],
+            "brightness": 32,
+            "sound": "rain",
+            "volume": 16,
+        }
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {"kept": True}
+    device.async_set_favorite.assert_awaited_once_with(
+        2,
+        enabled=False,
+        color=(0, 128, 255),
+        brightness=32,
+        sound=PyHatchBabyRestSound.rain,
+        volume=16,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_favorite_write_says_so_and_keeps_the_form(
+    hass: HomeAssistant, entry: MockConfigEntry, device: MagicMock
+):
+    """Test a favorite the device did not take leaves the edits to try again."""
+    device.async_set_favorite.side_effect = HatchRestConnectionError("no")
+    flow, _ = await _open_favorite(hass, entry, "2")
+
+    result = await flow.async_step_favorite(
+        {
+            "enabled": True,
+            "color": [253, 209, 45],
+            "brightness": 127,
+            "sound": "ocean",
+            "volume": 99,
+        }
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "favorite_write_failed"}
+    assert _suggested(result, "volume") == 99
+
+
+@pytest.mark.asyncio
+async def test_waits_for_the_favorites_to_be_read(
+    hass: HomeAssistant, entry: MockConfigEntry, device: MagicMock
+):
+    """Test the favorite editor will not open before the favorites are read."""
+    device.favorites = {}
+
+    result = await _flow(hass, entry).async_step_favorites()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "favorites_unread"

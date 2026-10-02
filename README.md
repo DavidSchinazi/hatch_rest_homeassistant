@@ -78,8 +78,12 @@ Assistant, so editing them no longer means shutting down the Bluetooth proxies
 to free the device up for the phone app.
 
 The usual way is the buttons: set the light and sound how you want them with
-the normal controls, then press **Save to Favorite N**. Two actions are
-available for automations:
+the normal controls, then press **Save to Favorite N**. To set a slot's
+values directly, go to **Settings → Devices & services → Hatch Rest**, press
+**Configure** on the device's entry and choose **Set Favorite**. Pick a
+favorite, and its light, sound and whether it is offered on the touch ring are
+shown as they are now; saving writes them to the device and reads them back.
+Two actions are available for automations:
 
 * `hatch_rest.save_favorite` — store what is playing now into a slot
 * `hatch_rest.set_favorite` — set a slot's colour, brightness, sound, volume
@@ -92,7 +96,7 @@ real hardware, is written up in [PROTOCOL.md](PROTOCOL.md).
 
 The ten programs stored on the device can be edited from Home Assistant too.
 Go to **Settings → Devices & services → Hatch Rest**, and press **Configure**
-on the device's entry. Pick a program, and its start time, duration, days,
+on the device's entry, then **Set Program**. Pick a program, and its start time, duration, days,
 light, sound, Toddler Lock, name and whether it runs are shown as they are
 now. Change what you like and save: the whole program is written to the device
 and read back. An empty slot can be filled in the same way.

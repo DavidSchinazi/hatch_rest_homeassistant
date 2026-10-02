@@ -40,6 +40,7 @@ from homeassistant.helpers.selector import (
 from .api import HatchRestConnectionError, PyHatchBabyRestAsync
 from .const import (
     DOMAIN,
+    FAVORITE_SLOTS,
     MANUFACTURER_ID,
     PROGRAM_DAYS,
     PROGRAM_DURATION_MAX_SECONDS,
@@ -80,7 +81,7 @@ class HatchBabyRestConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Return the program editor, behind the integration's Configure."""
+        """Return the favorite and program editor, behind Configure."""
         return HatchBabyRestOptionsFlow()
 
     def __init__(self) -> None:
@@ -311,12 +312,57 @@ def _program_changes(form: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class HatchBabyRestOptionsFlow(OptionsFlow):
-    """Edit the programs stored on a Hatch Rest.
+FAVORITE_SCHEMA = vol.Schema(
+    {
+        vol.Required("enabled"): BooleanSelector(),
+        vol.Required("color"): ColorRGBSelector(),
+        vol.Required("brightness"): NumberSelector(
+            NumberSelectorConfig(min=0, max=255, mode=NumberSelectorMode.SLIDER)
+        ),
+        vol.Required("sound"): SelectSelector(
+            SelectSelectorConfig(
+                options=[sound.name for sound in PyHatchBabyRestSound],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Required("volume"): NumberSelector(
+            NumberSelectorConfig(min=0, max=255, mode=NumberSelectorMode.SLIDER)
+        ),
+    }
+)
 
-    Pick a slot, then a form filled in with what it holds now. Saving writes
-    the whole program to the device and reads it back; nothing is stored in
-    the entry's options.
+
+def _favorite_form_values(favorite: dict) -> dict[str, Any]:
+    """Return a stored favorite as the editor's fields show it."""
+    sound = favorite["sound"]
+    return {
+        "enabled": favorite["enabled"],
+        "color": list(favorite["color"]),
+        "brightness": favorite["brightness"],
+        # As for a program: a sound with no name here reads as none, and is
+        # only changed if the form is saved.
+        "sound": sound.name if sound is not None else PyHatchBabyRestSound.none.name,
+        "volume": favorite["volume"],
+    }
+
+
+def _favorite_changes(form: dict[str, Any]) -> dict[str, Any]:
+    """Return the editor's fields as async_set_favorite takes them."""
+    return {
+        "enabled": form["enabled"],
+        "color": tuple(int(part) for part in form["color"]),
+        "brightness": int(form["brightness"]),
+        "sound": PyHatchBabyRestSound[form["sound"]],
+        "volume": int(form["volume"]),
+    }
+
+
+class HatchBabyRestOptionsFlow(OptionsFlow):
+    """Edit the favorites and programs stored on a Hatch Rest.
+
+    Choose which kind, pick a slot, then a form filled in with what it holds
+    now. Saving writes the whole slot to the device and reads it back;
+    nothing is stored in the entry's options.
     """
 
     def __init__(self) -> None:
@@ -330,9 +376,85 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose which program to edit."""
+        """Choose whether to edit a favorite or a program."""
         if self.config_entry.state is not ConfigEntryState.LOADED:
             return self.async_abort(reason="not_loaded")
+        return self.async_show_menu(
+            step_id="init", menu_options=["favorites", "programs"]
+        )
+
+    async def async_step_favorites(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which favorite to edit."""
+        favorites = self._device.favorites
+        if not any("color" in favorite for favorite in favorites.values()):
+            return self.async_abort(reason="favorites_unread")
+
+        if user_input is not None:
+            self._slot = int(user_input["favorite"])
+            return await self.async_step_favorite()
+
+        options = []
+        for slot in range(1, FAVORITE_SLOTS + 1):
+            favorite = favorites.get(slot, {})
+            if "color" not in favorite:
+                continue
+            sound = favorite["sound"]
+            sound_label = (
+                sound.name if sound is not None else f"sound {favorite['sound_id']}"
+            )
+            red, green, blue = favorite["color"]
+            state = "on" if favorite["enabled"] else "off"
+            label = (
+                f"{slot}: {favorite.get('name') or f'Favorite {slot}'} "
+                f"(#{red:02X}{green:02X}{blue:02X}, {sound_label}, {state})"
+            )
+            options.append(SelectOptionDict(value=str(slot), label=label))
+
+        return self.async_show_form(
+            step_id="favorites",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("favorite"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=options, mode=SelectSelectorMode.LIST
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_favorite(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit one favorite, starting from what the device holds."""
+        assert self._slot is not None
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                await self._device.async_set_favorite(
+                    self._slot, **_favorite_changes(user_input)
+                )
+            except (HatchRestConnectionError, ValueError) as err:
+                _LOGGER.warning("Writing favorite %d failed: %s", self._slot, err)
+                errors["base"] = "favorite_write_failed"
+            else:
+                return self.async_create_entry(data=dict(self.config_entry.options))
+
+        values = user_input or _favorite_form_values(self._device.favorites[self._slot])
+        return self.async_show_form(
+            step_id="favorite",
+            data_schema=self.add_suggested_values_to_schema(FAVORITE_SCHEMA, values),
+            errors=errors,
+            description_placeholders={"slot": str(self._slot)},
+        )
+
+    async def async_step_programs(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which program to edit."""
         programs = self._device.programs
         if not any("empty" in programs.get(slot, {}) for slot in programs):
             return self.async_abort(reason="programs_unread")
@@ -354,7 +476,7 @@ class HatchBabyRestOptionsFlow(OptionsFlow):
             options.append(SelectOptionDict(value=str(slot), label=label))
 
         return self.async_show_form(
-            step_id="init",
+            step_id="programs",
             data_schema=vol.Schema(
                 {
                     vol.Required("program"): SelectSelector(
