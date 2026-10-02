@@ -254,7 +254,8 @@ Again on 2026-10-02, from the favorite editor behind Configure: favorite 5 on th
 `(24, 20, 255)` at `ff`, no sound, volume `07`, enabled, to `PSC00804064`, `PSN05`, `PSV32`,
 `PSL80` — every field changed in one write — and read back as
 `010532000000000000644080001603`, which is exactly that. Writing the old values back read back
-unchanged from where it started.
+unchanged from where it started. Copying the Play's favorites 5 and 6 into the Extra's 5 and 6 the
+same way read back identical to the Play's, flags byte `0x16` included.
 
 Because the commit writes all five fields, a partial sequence does not leave the others alone — it
 leaves them at whatever the device collected. Anything you do not intend to change has to be read
@@ -475,6 +476,15 @@ Test B  06:45  1h30m  Tue,Thu      green at 200   bird, volume 100  Toddler Lock
 
 So a name can contain spaces, sent as they are after `ESX`, and `EGL` read back `85` — a program
 written this way looks to the device like one the app wrote.
+
+Copying from one device to another is the same complete write, each field taken from the other
+device's read. **Confirmed** on 2026-10-02 by copying the Play's programs 1, 5 and 7 ("Weekday
+Sleep", "Tuesday Morning", and an app placeholder named "Disabled" at 00:00) into the same slots on
+the Extra, over Time to Rise, TestA and an empty slot. Each read back matching its source in name,
+time, duration, days, colour, brightness, sound, volume, Toddler Lock and being disabled. What a
+copy does not carry is what is not understood, and each kept the Extra's own: the status byte read
+`0x05` against the Play's `0x85` (`0x80` for the placeholder), byte 17 `0x00` against `0xff`, the
+placeholder's last byte `0xdf` against `0x9f`, and the date half of the start, as with any write.
 
 **There is one staging buffer for all programs, and `ESF` saves all of it.** `ESB` does not load
 the selected slot into it. Saving a single field — `ESB05`, `ESD0258`, `ESF` — wrote the new
