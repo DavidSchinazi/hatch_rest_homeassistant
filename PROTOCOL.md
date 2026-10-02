@@ -250,6 +250,12 @@ PSF                      commit
 **Confirmed**: four writes across two slots, each verified by reading the slot back afterwards
 and comparing every field against what was asked for.
 
+Again on 2026-10-02, from the favorite editor behind Configure: favorite 5 on the Extra went from
+`(24, 20, 255)` at `ff`, no sound, volume `07`, enabled, to `PSC00804064`, `PSN05`, `PSV32`,
+`PSL80` — every field changed in one write — and read back as
+`010532000000000000644080001603`, which is exactly that. Writing the old values back read back
+unchanged from where it started.
+
 Because the commit writes all five fields, a partial sequence does not leave the others alone — it
 leaves them at whatever the device collected. Anything you do not intend to change has to be read
 first and sent back unchanged. Our one-field change (flipping `enabled` on slot 5) demonstrates
