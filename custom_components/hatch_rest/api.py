@@ -337,6 +337,10 @@ class PyHatchBabyRestAsync:
         # arrive under the same header, so this is the only way to tell them
         # apart.
         self._block_kind_in_flight: str | None = None
+        # What replies are logged against: the exchange in flight, or else
+        # the last state command, whose acknowledgement also arrives here.
+        self._command_in_flight: str | None = None
+        self._last_state_command: str | None = None
         self._block_reply: asyncio.Future[dict] | None = None
         self._text_reply: asyncio.Future[str] | None = None
         self._last_text: str | None = None
@@ -418,10 +422,9 @@ class PyHatchBabyRestAsync:
         # Raw, because several bytes in these replies are still unaccounted
         # for, and a capture is what settles them.
         _LOGGER.debug(
-            "%s reply to %s %s: %s",
+            "%s reply to %s: %s",
             self.address,
-            self._block_kind_in_flight,
-            self._slot_in_flight,
+            self._command_in_flight or self._last_state_command,
             data.hex(),
         )
         if self._capture is not None:
@@ -920,6 +923,7 @@ class PyHatchBabyRestAsync:
         # completes: connecting can take seconds, and an advertisement still
         # describing the old state would undo what was optimistically applied.
         self._settle_until = monotonic() + COMMAND_SETTLE_SECONDS
+        self._last_state_command = command
 
         try:
             await self._client_connect()
@@ -1506,6 +1510,7 @@ class PyHatchBabyRestAsync:
             loop = asyncio.get_running_loop()
             self._slot_in_flight = slot
             self._block_kind_in_flight = kind
+            self._command_in_flight = command
             self._block_reply = loop.create_future()
             self._text_reply = loop.create_future() if text else None
             self._last_text = None
@@ -1535,6 +1540,12 @@ class PyHatchBabyRestAsync:
                 return False
 
             finally:
+                # All of it, not only the futures. A slot left behind would
+                # have a reply arriving later filed against a slot nobody
+                # asked about, and labelled as answering it.
+                self._slot_in_flight = None
+                self._block_kind_in_flight = None
+                self._command_in_flight = None
                 self._block_reply = None
                 self._text_reply = None
                 self._ack_reply = None

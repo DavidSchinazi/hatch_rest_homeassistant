@@ -2376,6 +2376,57 @@ class TestPyHatchBabyRestAsync:
         assert api.favorites == {}
 
     @pytest.mark.asyncio
+    async def test_exchange_leaves_nothing_in_flight(self, api: PyHatchBabyRestAsync):
+        """Test a finished exchange forgets which slot it asked for.
+
+        It used to be left behind, so every acknowledgement to a state command
+        afterwards was logged as answering the last slot read, and a block
+        arriving late would have been filed against it.
+        """
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_program(10)
+
+        assert api._slot_in_flight is None
+        assert api._block_kind_in_flight is None
+        assert api._command_in_flight is None
+
+        api._list_notification_received(None, bytearray(FAVORITE_BLOCK))
+        assert api.favorites == {}
+
+    @pytest.mark.asyncio
+    async def test_reply_is_logged_against_its_command(
+        self, api: PyHatchBabyRestAsync, caplog: pytest.LogCaptureFixture
+    ):
+        """Test replies name the exchange in flight, or else the state command."""
+        caplog.set_level(logging.DEBUG)
+
+        async def answer(command):
+            api._list_notification_received(None, bytearray(PROGRAM_BLOCK))
+            api._list_notification_received(None, bytearray(b"OK"))
+
+        with patch.object(api, "_write_list_command", side_effect=answer):
+            await api.async_refresh_program(10)
+
+        api._client = AsyncMock()
+        with (
+            patch.object(api, "_client_connect", new_callable=AsyncMock),
+            patch.object(api, "_client_disconnect", new_callable=AsyncMock),
+        ):
+            await api._send_command("SN00")
+        api._list_notification_received(None, bytearray(b"OK"))
+
+        replies = [
+            r.getMessage() for r in caplog.records if " reply to " in r.getMessage()
+        ]
+        assert replies[0].endswith(f"reply to EGB0A: {PROGRAM_BLOCK.hex()}")
+        assert replies[-1].endswith("reply to SN00: 4f4b")
+
+    @pytest.mark.asyncio
     async def test_favorite_command_does_not_open_the_settle_window(
         self, api: PyHatchBabyRestAsync
     ):
