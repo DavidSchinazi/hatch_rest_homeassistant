@@ -1,6 +1,6 @@
 """Tests for Hatch Rest media player entity."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from homeassistant.components.media_player import MediaPlayerDeviceClass
@@ -101,12 +101,12 @@ class TestHatchBabyRestMediaPlayer:
         assert "Bird" in sources
         assert len(sources) == len(PyHatchBabyRestSound)
 
-    def test_state_off_when_power_off(
+    def test_state_paused_when_power_off(
         self, media_player_entity: HatchBabyRestMediaPlayer
     ):
-        """Test state is OFF when power is off."""
+        """Test a device that is off reads as paused, so play is offered."""
         media_player_entity.coordinator.data["power"] = False
-        assert media_player_entity.state == MediaPlayerState.OFF
+        assert media_player_entity.state == MediaPlayerState.PAUSED
 
     def test_state_paused_when_sound_none(
         self, media_player_entity: HatchBabyRestMediaPlayer
@@ -249,6 +249,60 @@ class TestHatchBabyRestMediaPlayer:
         await media_player_entity.async_media_play()
 
         media_player_entity._hatch_rest_device.turn_power_on.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_play_from_off_darkens_light_first(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test playing on a device that is off brings back only the sound.
+
+        Powering on restores the light that was on when it went off too. The
+        device stores a brightness sent while it is off, so darkening it
+        before powering on is what keeps it from flashing.
+        """
+        media_player_entity._previous_sound = PyHatchBabyRestSound.ocean
+        device = media_player_entity._hatch_rest_device
+        device.power = False
+        device.brightness = 128
+        order = AsyncMock()
+        device.set_brightness = order.set_brightness
+        device.turn_power_on = order.turn_power_on
+        device.set_sound = order.set_sound
+
+        await media_player_entity.async_media_play()
+
+        assert order.mock_calls == [
+            call.set_brightness(0),
+            call.turn_power_on(),
+            call.set_sound(PyHatchBabyRestSound.ocean),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_play_from_off_with_light_dark_sends_no_brightness(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test nothing is sent for a light that is already dark."""
+        device = media_player_entity._hatch_rest_device
+        device.power = False
+        device.brightness = 0
+
+        await media_player_entity.async_media_play()
+
+        device.set_brightness.assert_not_called()
+        device.turn_power_on.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_play_while_on_leaves_light_alone(
+        self, media_player_entity: HatchBabyRestMediaPlayer
+    ):
+        """Test the light is only touched when play powers the device on."""
+        device = media_player_entity._hatch_rest_device
+        device.power = True
+
+        await media_player_entity.async_media_play()
+
+        device.set_brightness.assert_not_called()
+        device.turn_power_on.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_media_play_no_previous_sound(

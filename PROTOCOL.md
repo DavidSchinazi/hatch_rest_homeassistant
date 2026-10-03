@@ -127,6 +127,19 @@ Setting the colour to `(254, 254, 254)` switches the device into gradient mode, 
 colours on its own. **Confirmed** by watching a device do it. The same colour is stored in favorite
 6 on three of our four devices, which is presumably how the app saves a gradient favorite.
 
+### Power is a mute, not a reset
+
+**Confirmed** on 2026-10-03. `SI00` leaves the colour, brightness, sound and volume in place, and
+the state payload goes on reporting them while the device is off; `SI01` brings back all of
+them at once. `SC` and `SN` sent to a device that is off are acknowledged and stored without
+powering it on. With the Extra playing `SCff800080` and `SN05` and then switched off, `SN00` and
+`SCff800000` each showed up in the next feedback with the power byte still `df`. After
+`SCff800080` and then `SI01`, the power byte went to `1f` with the sound still `00`, so only the
+light came back.
+
+To bring back one output of a device that is off, zero the other one first and power it on
+second. Zeroing it after `SI01` would let it play briefly.
+
 ### Sound ids
 
 **Confirmed.** The numbering has gaps — 1, 8 and 12 are absent — which is why this is a lookup

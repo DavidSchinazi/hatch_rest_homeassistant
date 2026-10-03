@@ -1,6 +1,6 @@
 """Tests for Hatch Rest light entity."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from homeassistant.components.light import (
@@ -12,7 +12,11 @@ from homeassistant.components.light.const import ColorMode
 from homeassistant.helpers.restore_state import RestoredExtraData
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from custom_components.hatch_rest.const import COLOR_GRADIENT, DEFAULT_ON_BRIGHTNESS
+from custom_components.hatch_rest.const import (
+    COLOR_GRADIENT,
+    DEFAULT_ON_BRIGHTNESS,
+    PyHatchBabyRestSound,
+)
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.light import HatchBabyRestLight
 
@@ -299,6 +303,60 @@ class TestHatchBabyRestLight:
 
         light_entity._hatch_rest_device.turn_power_on.assert_called_once()
         light_entity._hatch_rest_device.set_brightness.assert_called_once_with(100)
+
+    @pytest.mark.asyncio
+    async def test_turn_on_from_off_silences_sound_first(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test turning on the light of a device that is off brings back only it.
+
+        Powering on restores the sound that was playing when it went off too.
+        The device stores a sound sent while it is off, so silencing it before
+        powering on is what keeps it from playing even for a moment.
+        """
+        device = light_entity._hatch_rest_device
+        device.power = False
+        device.sound = PyHatchBabyRestSound.ocean
+        order = AsyncMock()
+        device.set_sound = order.set_sound
+        device.turn_power_on = order.turn_power_on
+        device.set_brightness = order.set_brightness
+
+        await light_entity.async_turn_on(**{ATTR_BRIGHTNESS: 100})
+
+        assert order.mock_calls == [
+            call.set_sound(PyHatchBabyRestSound.none),
+            call.turn_power_on(),
+            call.set_brightness(100),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_turn_on_from_off_without_sound_sends_no_sound(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test nothing is sent for a sound that is already silent."""
+        device = light_entity._hatch_rest_device
+        device.power = False
+        device.sound = PyHatchBabyRestSound.none
+
+        await light_entity.async_turn_on()
+
+        device.set_sound.assert_not_called()
+        device.turn_power_on.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_turn_on_while_on_leaves_sound_alone(
+        self, light_entity: HatchBabyRestLight
+    ):
+        """Test the sound is only touched when the light powers the device on."""
+        device = light_entity._hatch_rest_device
+        device.power = True
+        light_entity.coordinator.data["brightness"] = 0
+
+        await light_entity.async_turn_on()
+
+        device.set_sound.assert_not_called()
+        device.turn_power_on.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_turn_off(self, light_entity: HatchBabyRestLight):

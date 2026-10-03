@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
-from .const import COLOR_GRADIENT, DEFAULT_ON_BRIGHTNESS
+from .const import COLOR_GRADIENT, DEFAULT_ON_BRIGHTNESS, PyHatchBabyRestSound
 from .coordinator import HatchBabyRestEntity, HatchBabyRestUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -155,6 +155,14 @@ class HatchBabyRestLight(HatchBabyRestEntity, RestoreEntity, LightEntity):  # py
             rgb = COLOR_GRADIENT
 
         if not self._hatch_rest_device.power:
+            # Powering on brings back the sound that was playing when the
+            # device went off, as well as the light. Only the light was asked
+            # for, so silence the sound first: the device stores it while off,
+            # and doing it after would let it play for a moment. The media
+            # player remembers what to resume to.
+            if self._hatch_rest_device.sound != PyHatchBabyRestSound.none:
+                _LOGGER.debug("light silencing sound before powering on")
+                await self._hatch_rest_device.set_sound(PyHatchBabyRestSound.none)
             _LOGGER.debug("light _hatch_rest_device power not on -- turning on")
             await self._hatch_rest_device.turn_power_on()
 

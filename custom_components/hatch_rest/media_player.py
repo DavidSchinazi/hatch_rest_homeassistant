@@ -137,10 +137,14 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, RestoreEntity, MediaPlayerEn
 
     @property
     def state(self) -> MediaPlayerState | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Return the current state of the media player."""
-        # if power is off, then it's off
+        """Return the current state of the media player.
+
+        A device that is off reads as paused rather than off: this player
+        offers no turn on, so off would leave nothing to press, whereas play
+        powers the device on.
+        """
         if self.coordinator.data.get("power") is False:
-            return MediaPlayerState.OFF
+            return MediaPlayerState.PAUSED
 
         if self.coordinator.data.get("sound") == PyHatchBabyRestSound.none:
             return MediaPlayerState.PAUSED
@@ -198,6 +202,14 @@ class HatchBabyRestMediaPlayer(HatchBabyRestEntity, RestoreEntity, MediaPlayerEn
     async def async_media_play(self) -> None:
         """Play the media player."""
         if not self._hatch_rest_device.power:
+            # Powering on brings back the light that was on when the device
+            # went off, as well as the sound. Only the sound was asked for, so
+            # darken the light first: the device stores it while off, and
+            # doing it after would flash it. The light remembers its
+            # brightness to come back to.
+            if self._hatch_rest_device.brightness:
+                _LOGGER.debug("media_player darkening light before powering on")
+                await self._hatch_rest_device.set_brightness(0)
             _LOGGER.debug("media_player _hatch_rest_device power not on -- turning on")
             await self._hatch_rest_device.turn_power_on()
         # Nothing is known to resume to after a restart, or if the device was
