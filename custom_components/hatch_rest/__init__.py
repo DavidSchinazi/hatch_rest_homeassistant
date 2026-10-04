@@ -8,7 +8,9 @@ from homeassistant import config_entries, core
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
+    BluetoothChange,
     BluetoothScanningMode,
+    BluetoothServiceInfoBleak,
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ADDRESS, Platform
@@ -83,7 +85,8 @@ async def async_setup_entry(
 
     address = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper())
-    if not ble_device:
+    seen = ble_device is not None
+    if not seen:
         # Nothing has been heard from this address, which is what an unplugged
         # Hatch looks like. Set up against a placeholder rather than holding
         # the entry in retry: the entities are then present but unavailable,
@@ -112,6 +115,29 @@ async def async_setup_entry(
             service_info.manufacturer_data.get(MANUFACTURER_ID), service_info.time
         )
 
+    @core.callback
+    def async_start_connecting() -> None:
+        """Hold a connection from now on.
+
+        It carries state as notifications, and keeps the cost of connecting
+        -- which can take ten seconds on a weak link -- out of the way of
+        commands. In the background so setup is not held up by it.
+        """
+        nonlocal seen
+        seen = True
+        entry.async_create_background_task(
+            hass, hatch_rest_device.async_start(), f"{DOMAIN} connect {address}"
+        )
+
+    @core.callback
+    def async_handle_advertisement(
+        service_info: BluetoothServiceInfoBleak, change: BluetoothChange
+    ) -> None:
+        """Take state from an advertisement, and connect if this is the first."""
+        coordinator.async_handle_advertisement(service_info, change)
+        if not seen:
+            async_start_connecting()
+
     # Keep state up to date from advertisements, which need no connection.
     # The state lives in the manufacturer data, which is too big to share a
     # legacy advertising PDU with the name and service data the device also
@@ -119,7 +145,7 @@ async def async_setup_entry(
     entry.async_on_unload(
         bluetooth.async_register_callback(
             hass,
-            coordinator.async_handle_advertisement,
+            async_handle_advertisement,
             BluetoothCallbackMatcher(address=address.upper(), connectable=True),
             BluetoothScanningMode.ACTIVE,
             # An AUTO mode scanner only turns active for a registered address
@@ -141,13 +167,14 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Hold a connection from now on: it carries state as notifications, and
-    # keeps the cost of connecting -- which can take ten seconds on a weak
-    # link -- out of the way of commands. In the background so setup is not
-    # held up by it.
-    entry.async_create_background_task(
-        hass, hatch_rest_device.async_start(), f"{DOMAIN} connect {address}"
-    )
+    # Connect only once a proxy has heard the device. Before then there is no
+    # path to it: bleak_retry_connector backs off four seconds and tries
+    # again, which ran into the connect deadline after a restart -- the
+    # second try cancelled a fraction of a second in, leaving the proxy still
+    # connecting and ignoring the attempts that followed. An unseen device
+    # connects from its first advertisement instead.
+    if seen:
+        async_start_connecting()
 
     return True
 

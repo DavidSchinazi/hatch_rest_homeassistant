@@ -228,6 +228,57 @@ class TestAsyncSetupEntry:
         assert coordinator.hatch_rest_device.name == mock_entry.title
 
     @pytest.mark.asyncio
+    async def test_unseen_device_connects_from_its_first_advertisement(
+        self,
+        hass: HomeAssistant,
+        mock_entry: MockConfigEntry,
+        mock_ble_device: BLEDevice,
+    ):
+        """Test a device no proxy has heard is not connected to until it is.
+
+        With no path to it, bleak_retry_connector waits four seconds and
+        tries again, and that try ran into the connect deadline after a
+        restart. Connecting once it has been heard avoids both.
+        """
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ) as mock_register,
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock
+            ) as mock_start,
+        ):
+            await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+            mock_start.assert_not_called()
+
+            handle_advertisement = mock_register.call_args.args[1]
+            service_info = MagicMock()
+            service_info.device = mock_ble_device
+            service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+            service_info.time = monotonic()
+            handle_advertisement(service_info, None)
+            handle_advertisement(service_info, None)
+            await hass.async_block_till_done()
+
+        # Once, however many advertisements follow.
+        mock_start.assert_called_once()
+        assert mock_entry.runtime_data.hatch_rest_device.device is mock_ble_device
+
+    @pytest.mark.asyncio
     async def test_advertisement_replaces_placeholder_device(
         self,
         hass: HomeAssistant,
