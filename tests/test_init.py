@@ -236,9 +236,9 @@ class TestAsyncSetupEntry:
     ):
         """Test a device no proxy has heard is not connected to until it is.
 
-        With no path to it, bleak_retry_connector waits four seconds and
-        tries again, and that try ran into the connect deadline after a
-        restart. Connecting once it has been heard avoids both.
+        With no path to it, bleak_retry_connector only waits four seconds at
+        a time and tries again. Connecting once it has been heard avoids the
+        wait.
         """
         with (
             patch(

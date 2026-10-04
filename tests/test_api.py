@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import BleakConnectionError
+from bleak_retry_connector import BleakConnectionError, BleakNotFoundError
 
 from custom_components.hatch_rest.api import (
     HatchRestConnectionError,
@@ -634,48 +634,46 @@ class TestPyHatchBabyRestAsync:
         assert api.power is False
 
     @pytest.mark.asyncio
-    async def test_client_connect_times_out(self, api: PyHatchBabyRestAsync):
-        """Test a connection that never completes is given up on.
+    async def test_client_connect_tries_once(self, api: PyHatchBabyRestAsync):
+        """Test a connect is one try, bounded by the library's own deadline.
 
-        establish_connection retries internally with no overall deadline, so
-        without a timeout an unreachable device blocks setup and every other
-        caller waiting behind this one.
+        Retrying is left to the reconnect loop, and nothing cuts the try
+        short: the proxy carries on connecting regardless.
         """
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            new_callable=AsyncMock,
+            side_effect=BleakNotFoundError("timed out"),
+        ) as mock_establish:
+            await api._client_connect()
 
-        async def never_connects(*args, **kwargs):
-            await asyncio.sleep(3600)
-
-        with (
-            patch(
-                "custom_components.hatch_rest.api.establish_connection",
-                never_connects,
-            ),
-            patch("custom_components.hatch_rest.api.CONNECT_TIMEOUT_SECONDS", 0.05),
-        ):
-            await asyncio.wait_for(api._client_connect(), timeout=5)
-
+        mock_establish.assert_called_once()
+        assert mock_establish.call_args.kwargs["max_attempts"] == 1
         assert api._client is None
         assert api._connecting is False
 
     @pytest.mark.asyncio
-    async def test_client_connect_timeout_releases_waiters(
+    async def test_client_connect_failure_releases_waiters(
         self, api: PyHatchBabyRestAsync
     ):
-        """Test callers queued behind a stuck connection are released."""
+        """Test callers queued behind a failed connection are released."""
+        attempt_started = asyncio.Event()
+        give_up = asyncio.Event()
 
-        async def never_connects(*args, **kwargs):
-            await asyncio.sleep(3600)
+        async def fails_when_told(*args, **kwargs):
+            attempt_started.set()
+            await give_up.wait()
+            raise BleakNotFoundError("timed out")
 
-        with (
-            patch(
-                "custom_components.hatch_rest.api.establish_connection",
-                never_connects,
-            ),
-            patch("custom_components.hatch_rest.api.CONNECT_TIMEOUT_SECONDS", 0.05),
+        with patch(
+            "custom_components.hatch_rest.api.establish_connection",
+            fails_when_told,
         ):
             first = asyncio.create_task(api._client_connect())
-            await asyncio.sleep(0)  # let the first caller claim the connect
+            await attempt_started.wait()
             second = asyncio.create_task(api._client_connect())
+            await asyncio.sleep(0)
+            give_up.set()
 
             await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
 

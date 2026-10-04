@@ -171,9 +171,9 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Connect only once a proxy has heard the device. Before then there is no
-    # path to it: bleak_retry_connector backs off four seconds and tries
-    # again, which ran into the connect deadline after a restart -- the
-    # second try cancelled a fraction of a second in. An unseen device
+    # path to it, and bleak_retry_connector only backs off four seconds at a
+    # time and tries again -- which, under the deadline we used to have, cut
+    # the second try off a fraction of a second in. An unseen device
     # connects from its first advertisement instead, which may already have
     # arrived while the platforms were set up -- as may one for a device that
     # was seen, since registering replays the last.

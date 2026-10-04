@@ -242,23 +242,21 @@ ACTIVE_SCAN_DURATION_SECONDS = 35
 # seconds, so this only connects to a device that has really gone quiet.
 ADVERTISEMENT_STALE_SECONDS = 300
 
-# How long to wait for a connection. establish_connection retries internally
-# with no overall deadline, so an unreachable device can otherwise block for
-# minutes -- and block every other caller behind it, since a connection
-# attempt holds off the ones waiting on it.
+# How many tries establish_connection makes at connecting. One, leaving
+# retries to the reconnect loop, which spaces them out and backs off.
 #
-# Connecting either works quickly or not at all: observed successes take
-# between 0.6s and 1.7s, while a stuck attempt runs until it is cut off.
-# Giving up early costs little, since the retry follows a couple of seconds
-# later and repeated failures back off on their own.
-#
-# Briefly ten, while working out why one device failed seven connects in a row
-# on the deadline. It turned out to be sitting on a metal nightstand, which
-# detunes its antenna: it still advertises well enough to be seen, since that
-# is the direction RSSI measures, but cannot hear the proxy well enough to
-# take a connection. No deadline fixes a link that will not form, and a longer
-# one only makes each doomed attempt cost more.
-CONNECT_TIMEOUT_SECONDS = 5
+# Each try is then bounded by the library's own deadline: 20 seconds, which
+# matches how long the ESPHome proxies keep trying to open a link, and on
+# expiry it disconnects and waits for the proxy to confirm. This replaced a
+# five second deadline of our own, wrapped around the whole call. The proxy
+# does not stop when a connect is cancelled -- it schedules the disconnect for
+# once the link opens and carries on -- so cutting it short gained nothing.
+# Seen on 2026-10-04 with the Play, through the main proxy: one connect that
+# took 21 seconds to open, while we gave up on it twice and reported it
+# unreachable. The library's retries, meanwhile, ran into that deadline: a
+# second try after a four second backoff was cut off a fraction of a second
+# in.
+CONNECT_ATTEMPTS = 1
 
 # How long to wait before trying a dropped connection again, and the most
 # it will ever wait.
