@@ -86,6 +86,8 @@ async def async_setup_entry(
     address = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper())
     seen = ble_device is not None
+    # Whether async_start has been called, which must happen only once.
+    connecting = False
     if not seen:
         # Nothing has been heard from this address, which is what an unplugged
         # Hatch looks like. Set up against a placeholder rather than holding
@@ -123,8 +125,10 @@ async def async_setup_entry(
         -- which can take ten seconds on a weak link -- out of the way of
         commands. In the background so setup is not held up by it.
         """
-        nonlocal seen
-        seen = True
+        nonlocal connecting
+        if connecting:
+            return
+        connecting = True
         entry.async_create_background_task(
             hass, hatch_rest_device.async_start(), f"{DOMAIN} connect {address}"
         )
@@ -133,10 +137,9 @@ async def async_setup_entry(
     def async_handle_advertisement(
         service_info: BluetoothServiceInfoBleak, change: BluetoothChange
     ) -> None:
-        """Take state from an advertisement, and connect if this is the first."""
+        """Take state from an advertisement, and connect if not already."""
         coordinator.async_handle_advertisement(service_info, change)
-        if not seen:
-            async_start_connecting()
+        async_start_connecting()
 
     # Keep state up to date from advertisements, which need no connection.
     # The state lives in the manufacturer data, which is too big to share a
@@ -170,9 +173,10 @@ async def async_setup_entry(
     # Connect only once a proxy has heard the device. Before then there is no
     # path to it: bleak_retry_connector backs off four seconds and tries
     # again, which ran into the connect deadline after a restart -- the
-    # second try cancelled a fraction of a second in, leaving the proxy still
-    # connecting and ignoring the attempts that followed. An unseen device
-    # connects from its first advertisement instead.
+    # second try cancelled a fraction of a second in. An unseen device
+    # connects from its first advertisement instead, which may already have
+    # arrived while the platforms were set up -- as may one for a device that
+    # was seen, since registering replays the last.
     if seen:
         async_start_connecting()
 

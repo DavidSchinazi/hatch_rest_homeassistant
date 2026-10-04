@@ -279,6 +279,52 @@ class TestAsyncSetupEntry:
         assert mock_entry.runtime_data.hatch_rest_device.device is mock_ble_device
 
     @pytest.mark.asyncio
+    async def test_advertisement_during_setup_connects_once(
+        self,
+        hass: HomeAssistant,
+        mock_entry: MockConfigEntry,
+        mock_ble_device: BLEDevice,
+    ):
+        """Test a device first heard while platforms set up connects once.
+
+        The advertisement connects to it, and by the time setup finishes the
+        device has been seen, so setup must not connect a second time.
+        """
+        service_info = MagicMock()
+        service_info.device = mock_ble_device
+        service_info.manufacturer_data = {MANUFACTURER_ID: ADVERTISEMENT}
+        service_info.time = monotonic()
+
+        with (
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.hatch_rest.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ) as mock_register,
+            patch(
+                "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+                new_callable=AsyncMock,
+            ) as mock_forward,
+            patch.object(
+                PyHatchBabyRestAsync, "async_start", new_callable=AsyncMock
+            ) as mock_start,
+        ):
+            mock_forward.side_effect = lambda *args: mock_register.call_args.args[1](
+                service_info, None
+            )
+            await async_setup_entry(hass, mock_entry)
+            await hass.async_block_till_done()
+
+        mock_start.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_advertisement_replaces_placeholder_device(
         self,
         hass: HomeAssistant,
