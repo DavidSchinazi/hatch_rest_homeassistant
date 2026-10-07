@@ -1,9 +1,14 @@
 """Tests for Hatch Rest sensors."""
 
+import math
+from datetime import timedelta
+from time import monotonic
 from unittest.mock import MagicMock, patch
 
 import pytest
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import EntityCategory
+from homeassistant.util import dt as dt_util
 
 from custom_components.hatch_rest.coordinator import HatchBabyRestUpdateCoordinator
 from custom_components.hatch_rest.sensor import (
@@ -35,31 +40,80 @@ class TestSensorSetup:
 class TestHatchBabyRestTimerSensor:
     """Tests for HatchBabyRestTimerSensor."""
 
-    @pytest.mark.parametrize(
-        ("seconds", "shown"),
-        [
-            (21076, "5:51:16"),
-            (3600, "1:00:00"),
-            (252, "0:04:12"),
-            (1, "0:00:01"),
-            (None, "Off"),
-        ],
-    )
-    def test_shows_hours_minutes_and_seconds_or_off(
-        self, mock_coordinator: HatchBabyRestUpdateCoordinator, seconds, shown
+    @staticmethod
+    def _run_timer(device, seconds: float | None) -> None:
+        """Make the mocked device report a timer with this much left."""
+        if seconds is None:
+            device.timer_expires_at = None
+            device.timer_remaining = None
+        else:
+            device.timer_expires_at = monotonic() + seconds
+            device.timer_remaining = math.ceil(seconds)
+
+    def test_is_a_timestamp(self, mock_coordinator: HatchBabyRestUpdateCoordinator):
+        """Test Home Assistant is told to show it as a time."""
+        sensor = HatchBabyRestTimerSensor(mock_coordinator)
+
+        assert sensor.device_class is SensorDeviceClass.TIMESTAMP
+
+    def test_shows_when_the_timer_runs_out(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test the time left reads as H:MM:SS, and Off with no timer."""
-        mock_coordinator.hatch_rest_device.timer_remaining = seconds
+        """Test a running timer reads as its end, to the second."""
+        self._run_timer(mock_coordinator.hatch_rest_device, 21076)
+        before = dt_util.utcnow()
 
-        assert HatchBabyRestTimerSensor(mock_coordinator).native_value == shown
+        ends = HatchBabyRestTimerSensor(mock_coordinator).native_value
 
-    def test_ticks_write_only_when_what_it_shows_moves(
+        assert ends is not None
+        assert ends.microsecond == 0
+        assert abs((ends - before).total_seconds() - 21076) <= 1
+
+    def test_shows_nothing_with_no_timer(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test no timer is no end time."""
+        self._run_timer(mock_coordinator.hatch_rest_device, None)
+
+        assert HatchBabyRestTimerSensor(mock_coordinator).native_value is None
+
+    def test_a_reread_a_second_out_keeps_the_same_end(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test reading the same timer again on reconnect changes nothing.
+
+        Each read is to the whole second, so the same timer comes back a
+        second either way.
+        """
+        sensor = HatchBabyRestTimerSensor(mock_coordinator)
+        device = mock_coordinator.hatch_rest_device
+        self._run_timer(device, 3600)
+        first = sensor.native_value
+
+        device.timer_expires_at += 1
+
+        assert sensor.native_value == first
+
+    def test_a_changed_timer_moves_the_end(
+        self, mock_coordinator: HatchBabyRestUpdateCoordinator
+    ):
+        """Test a timer set to something else shows its new end."""
+        sensor = HatchBabyRestTimerSensor(mock_coordinator)
+        device = mock_coordinator.hatch_rest_device
+        self._run_timer(device, 3600)
+        first = sensor.native_value
+
+        self._run_timer(device, 900)
+
+        assert first is not None
+        assert sensor.native_value == first - timedelta(seconds=2700)
+
+    def test_ticks_write_only_when_the_end_moves(
         self, hass, mock_coordinator: HatchBabyRestUpdateCoordinator
     ):
-        """Test the countdown shows between coordinator updates, without spam.
+        """Test a running timer is not a state change every second.
 
-        Coordinator updates come every 90 seconds, which on its own made the
-        sensor count down in steps of one or two minutes.
+        It used to show the time left, which changed on every tick.
         """
         sensor = HatchBabyRestTimerSensor(mock_coordinator)
         device = mock_coordinator.hatch_rest_device
@@ -67,15 +121,15 @@ class TestHatchBabyRestTimerSensor:
         with patch(
             "homeassistant.helpers.entity.Entity.async_write_ha_state"
         ) as written:
-            device.timer_remaining = 12
-            sensor._async_tick(None)
+            self._run_timer(device, 12)
             sensor._async_tick(None)
             device.timer_remaining = 11
             sensor._async_tick(None)
-            device.timer_remaining = None
+            sensor._async_tick(None)
+            self._run_timer(device, None)
             sensor._async_tick(None)
 
-        assert written.call_count == 3
+        assert written.call_count == 2
 
 
 class TestSensorEntityCategories:
